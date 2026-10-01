@@ -19,6 +19,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | Data | Fase | Cosa è stato fatto | Step completati |
 |:-----|:-----|:--------------------|:----------------|
 | 2026-10-01 | Analisi | Analisi fattibilità completa, 3 strategie identificate (A/B/C) | Fase 0 ✅ |
+| 2026-10-01 | Fase 1 | Implementato tool AutoProtect autonomo: `tools/autoprotect/autoprotect.py` (QMP client nativo, daemon, oneshot, list, prune, discovery), `start.sh`, `stop.sh`, `Makefile`, unit test `test_autoprotect.py`, systemd service/timer e `README.md` | Fase 1 ✅ |
 
 ---
 
@@ -106,12 +107,12 @@ produce un deliverable funzionante e testabile indipendentemente.
 
 ### FASE 1 — Script Esterno QMP (Strategia A)
 **Obiettivo:** Prototipo funzionante che valida il flusso end-to-end senza toccare QEMU.
-**Stato:** ⬜ Da fare
+**Stato:** ✅ Completata
 
 #### Step 1.1 — Script base: singolo snapshot via QMP
-- [ ] Creare `tools/autoprotect/autoprotect.py`
-- [ ] Connessione al socket QMP UNIX (es. `/tmp/qemu-monitor.sock`)
-- [ ] Invio comando `snapshot-save` con parametri:
+- [x] Creare `tools/autoprotect/autoprotect.py`
+- [x] Connessione al socket QMP UNIX (es. `/tmp/qemu-monitor.sock`)
+- [x] Invio comando `snapshot-save` con parametri:
   ```json
   { "execute": "snapshot-save",
     "arguments": {
@@ -122,8 +123,8 @@ produce un deliverable funzionante e testabile indipendentemente.
     }
   }
   ```
-- [ ] Polling/attesa `JOB_STATUS_CHANGE` → `concluded`
-- [ ] Gestione errori (job failed, socket non connesso, VM non running)
+- [x] Polling/attesa `JOB_STATUS_CHANGE` → `concluded`
+- [x] Gestione errori (job failed, socket non connesso, VM non running)
 - **File:** `tools/autoprotect/autoprotect.py`
 - **Test:** lanciare QEMU con `-qmp unix:/tmp/qmp.sock,server,wait=off`, eseguire script,
   verificare snapshot creato con `info snapshots` nel monitor HMP
@@ -133,13 +134,13 @@ produce un deliverable funzionante e testabile indipendentemente.
   - Lo snapshot è visibile in `info snapshots`
 
 #### Step 1.2 — Listing e retention degli snapshot
-- [ ] Aggiungere al script la capacità di elencare gli snapshot esistenti
-- [ ] Usare `human-monitor-command` con `info snapshots` per ottenere la lista
+- [x] Aggiungere al script la capacità di elencare gli snapshot esistenti
+- [x] Usare `human-monitor-command` con `info snapshots` per ottenere la lista
   (oppure `query-named-block-nodes` → campo `snapshots` di tipo `SnapshotInfo[]`,
   che contiene `date-sec`, `date-nsec` per ogni snapshot)
-- [ ] Filtrare solo quelli con prefisso `autoprotect-`
-- [ ] Calcolare l'età: `now - date_sec` in ore
-- [ ] Per quelli oltre la soglia di retention (parametro `--retention-hours`),
+- [x] Filtrare solo quelli con prefisso `autoprotect-`
+- [x] Calcolare l'età: `now - date_sec` in ore
+- [x] Per quelli oltre la soglia di retention (parametro `--retention-hours`),
   inviare `snapshot-delete`:
   ```json
   { "execute": "snapshot-delete",
@@ -150,19 +151,19 @@ produce un deliverable funzionante e testabile indipendentemente.
     }
   }
   ```
-- [ ] Attendere completamento job di eliminazione
+- [x] Attendere completamento job di eliminazione
 - **Criteri di accettazione:**
   - Con `--retention-hours 1`, gli snapshot più vecchi di 1 ora vengono eliminati
   - Gli snapshot manuali (senza prefisso `autoprotect-`) NON vengono toccati
 
 #### Step 1.3 — Loop periodico e integrazione systemd
-- [ ] Aggiungere parametro `--interval-minutes N`
-- [ ] Due modalità di esecuzione:
+- [x] Aggiungere parametro `--interval-minutes N`
+- [x] Due modalità di esecuzione:
   - **One-shot**: esegue un ciclo (snapshot + prune) ed esce (per cron/systemd timer)
   - **Daemon**: loop interno con `time.sleep(interval * 60)` (più semplice)
-- [ ] Creare `tools/autoprotect/autoprotect.service` (unit systemd timer)
-- [ ] Creare `tools/autoprotect/autoprotect.timer` (timer systemd)
-- [ ] Documentare nel README la configurazione
+- [x] Creare `tools/autoprotect/autoprotect.service` (unit systemd timer)
+- [x] Creare `tools/autoprotect/autoprotect.timer` (timer systemd)
+- [x] Documentare nel README la configurazione
 - **File:** `tools/autoprotect/autoprotect.py`, `tools/autoprotect/autoprotect.service`,
   `tools/autoprotect/autoprotect.timer`, `tools/autoprotect/README.md`
 - **Criteri di accettazione:**
@@ -172,12 +173,12 @@ produce un deliverable funzionante e testabile indipendentemente.
   - Gestione graceful di SIGTERM/SIGINT
 
 #### Step 1.4 — Robustezza e discovery
-- [ ] Auto-discovery del device vmstate via `query-named-block-nodes`
+- [x] Auto-discovery del device vmstate via `query-named-block-nodes`
   (primo nodo che ha `"drv": "qcow2"` e supporta snapshot)
-- [ ] Gestione del caso "snapshot già in corso" (polling `query-jobs`)
-- [ ] Gestione del caso "disco pieno" (check spazio pre-snapshot)
-- [ ] Gestione del caso "QMP socket disconnesso" (retry con backoff)
-- [ ] Lock file per evitare istanze multiple
+- [x] Gestione del caso "snapshot già in corso" (polling `query-jobs`)
+- [x] Gestione del caso "disco pieno" (check spazio pre-snapshot)
+- [x] Gestione del caso "QMP socket disconnesso" (retry con backoff)
+- [x] Lock file per evitare istanze multiple
 - **Criteri di accettazione:**
   - Lo script non crasha mai, logga errori e riprova
   - Su disco pieno, salta lo snapshot e logga warning

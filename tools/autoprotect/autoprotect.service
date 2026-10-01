@@ -1,0 +1,15 @@
+[Unit]
+Description=QEMU AutoProtect Snapshot and Retention Service
+After=network.target
+Documentation=https://www.qemu.org/docs/master/
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/gelma/dev/prg/qemu/tools/autoprotect/autoprotect.py --socket /tmp/qemu-qmp.sock --interval-minutes 30 --retention-hours 24 --mode daemon
+Restart=on-failure
+RestartSec=10
+KillMode=process
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

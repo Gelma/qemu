@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic trigger for QEMU AutoProtect oneshot snapshots
+Documentation=https://www.qemu.org/docs/master/
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
