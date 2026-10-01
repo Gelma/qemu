@@ -22,6 +22,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | 2026-10-01 | Fase 1 | Implementato tool AutoProtect autonomo: `tools/autoprotect/autoprotect.py` (QMP client nativo, daemon, oneshot, list, prune, discovery), `start.sh`, `stop.sh`, `Makefile`, unit test `test_autoprotect.py`, systemd service/timer e `README.md` | Fase 1 ✅ |
 | 2026-10-01 | Fase 2 | Implementato modulo interno QEMU: schema QAPI (`qapi/autoprotect.json`), header `include/migration/autoprotect.h`, implementazione stub C in `migration/autoprotect.c`, integrazione build in `qapi/meson.build`, `migration/meson.build`, `qapi/qapi-schema.json`. Compilazione e linking verificati, comandi QMP testati live. | Fase 2 ✅ |
 | 2026-10-01 | Fase 3 | Implementata logica interna completa in `migration/autoprotect.c`: gestione `AutoProtectState`, timer `QEMUTimer` su `QEMU_CLOCK_REALTIME`, callback di snapshot periodico via `save_snapshot`, pruning automatico via `delete_snapshot` con salvaguardia snapshot manuali, comandi HMP `autoprotect` e `info autoprotect`. Test di funzionamento live su VM reale superati. | Fase 3 ✅ |
+| 2026-10-01 | Tooling | Creato script `configure_max.sh` che lancia `./configure --prefix="/opt/qemu"` abilitando tutte le 107 feature opzionali supportate e compilabili sul laptop (testate ed escluse le 34 non supportate/mancanti di librerie terze). | Tooling ✅ |
 
 ---
 
