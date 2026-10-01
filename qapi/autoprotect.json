@@ -19,10 +19,11 @@
 # @retention-hours: Number of hours after which AutoProtect snapshots
 #     expire and are pruned.
 #
-# @vmstate: Node name of the block device used to store VM RAM state.
+# @vmstate: Node name of the block device used to store VM RAM state
+#     (default: auto-detect).
 #
 # @devices: List of block device node names to include in each
-#     snapshot.
+#     snapshot (default: all snapshot-capable devices).
 #
 # @name-prefix: Optional custom prefix for generated snapshot tags
 #     (default: 'autoprotect-').
@@ -32,8 +33,8 @@
 { 'struct': 'AutoProtectConfig',
   'data': { 'interval-seconds': 'int',
             'retention-hours': 'int',
-            'vmstate': 'str',
-            'devices': ['str'],
+            '*vmstate': 'str',
+            '*devices': ['str'],
             '*name-prefix': 'str' } }
 
 ##

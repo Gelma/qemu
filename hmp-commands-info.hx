@@ -381,6 +381,19 @@ SRST
 ERST
 
     {
+        .name       = "autoprotect",
+        .args_type  = "",
+        .params     = "",
+        .help       = "show AutoProtect status",
+        .cmd        = hmp_info_autoprotect,
+    },
+
+SRST
+  ``info autoprotect``
+    Show the current status of the AutoProtect subsystem.
+ERST
+
+    {
         .name       = "status",
         .args_type  = "",
         .params     = "",

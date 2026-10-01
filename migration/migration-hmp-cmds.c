@@ -24,6 +24,7 @@
 #include "monitor/monitor-hmp-internal.h"
 #include "qapi/error.h"
 #include "qapi/qapi-commands-migration.h"
+#include "qapi/qapi-commands-autoprotect.h"
 #include "qapi/qapi-visit-migration.h"
 #include "qobject/qdict.h"
 #include "qapi/string-input-visitor.h"
@@ -505,6 +506,76 @@ void hmp_delvm(MonitorHMP *hmp, const QDict *qdict)
     const char *name = qdict_get_str(qdict, "name");
 
     delete_snapshot(name, false, NULL, &err);
+    hmp_handle_error(hmp, err);
+}
+
+void hmp_info_autoprotect(MonitorHMP *hmp, const QDict *qdict)
+{
+    Error *err = NULL;
+    AutoProtectInfo *info = qmp_autoprotect_status(&err);
+
+    if (hmp_handle_error(hmp, err)) {
+        return;
+    }
+
+    monitor_hmp_printf(hmp, "AutoProtect: %s\n",
+                       info->enabled ? "enabled" : "disabled");
+    if (info->enabled && info->config) {
+        monitor_hmp_printf(hmp, "  Interval:      %" PRId64 " seconds\n",
+                           info->config->interval_seconds);
+        monitor_hmp_printf(hmp, "  Retention:     %" PRId64 " hours\n",
+                           info->config->retention_hours);
+        if (info->config->vmstate) {
+            monitor_hmp_printf(hmp, "  VMState Node:  %s\n",
+                               info->config->vmstate);
+        }
+        if (info->config->name_prefix) {
+            monitor_hmp_printf(hmp, "  Prefix:        %s\n",
+                               info->config->name_prefix);
+        }
+        if (info->has_next_snapshot_seconds) {
+            monitor_hmp_printf(hmp, "  Next Snapshot: in %" PRId64 " seconds\n",
+                               info->next_snapshot_seconds);
+        }
+    }
+    if (info->last_snapshot_tag) {
+        monitor_hmp_printf(hmp, "  Last Snapshot: %s\n",
+                           info->last_snapshot_tag);
+    }
+    if (info->has_snapshots_taken) {
+        monitor_hmp_printf(hmp, "  Total Taken:   %" PRId64 "\n",
+                       info->snapshots_taken);
+    }
+    if (info->has_snapshots_pruned) {
+        monitor_hmp_printf(hmp, "  Total Pruned:  %" PRId64 "\n",
+                       info->snapshots_pruned);
+    }
+
+    qapi_free_AutoProtectInfo(info);
+}
+
+void hmp_autoprotect(MonitorHMP *hmp, const QDict *qdict)
+{
+    const char *action = qdict_get_str(qdict, "action");
+    Error *err = NULL;
+
+    if (strcmp(action, "off") == 0 || strcmp(action, "disable") == 0) {
+        qmp_autoprotect_disable(&err);
+    } else if (strcmp(action, "on") == 0 || strcmp(action, "enable") == 0) {
+        AutoProtectConfig config = {
+            .interval_seconds = qdict_get_try_int(qdict, "interval", 1800),
+            .retention_hours = qdict_get_try_int(qdict, "retention", 24),
+            .vmstate = (char *)qdict_get_try_str(qdict, "vmstate"),
+            .name_prefix = (char *)qdict_get_try_str(qdict, "prefix"),
+        };
+        qmp_autoprotect_enable(&config, &err);
+    } else {
+        monitor_hmp_printf(hmp,
+            "Usage: autoprotect on|off [interval-sec] [retention-hours] "
+            "[prefix] [vmstate]\n");
+        return;
+    }
+
     hmp_handle_error(hmp, err);
 }
 

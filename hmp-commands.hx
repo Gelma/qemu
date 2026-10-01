@@ -394,6 +394,19 @@ SRST
 ERST
 
     {
+        .name       = "autoprotect",
+        .args_type  = "action:s,interval:i?,retention:i?,prefix:s?,vmstate:s?",
+        .params     = "on|off [interval-sec] [retention-hours] [prefix] [vmstate]",
+        .help       = "enable or disable AutoProtect periodic snapshots",
+        .cmd        = hmp_autoprotect,
+    },
+
+SRST
+``autoprotect`` *on|off* [*interval*] [*retention*] [*prefix*] [*vmstate*]
+  Enable or disable AutoProtect periodic automated snapshots.
+ERST
+
+    {
         .name       = "one-insn-per-tb",
         .args_type  = "option:s?",
         .params     = "[on|off]",

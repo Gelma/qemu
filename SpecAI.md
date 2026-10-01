@@ -21,6 +21,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | 2026-10-01 | Analisi | Analisi fattibilità completa, 3 strategie identificate (A/B/C) | Fase 0 ✅ |
 | 2026-10-01 | Fase 1 | Implementato tool AutoProtect autonomo: `tools/autoprotect/autoprotect.py` (QMP client nativo, daemon, oneshot, list, prune, discovery), `start.sh`, `stop.sh`, `Makefile`, unit test `test_autoprotect.py`, systemd service/timer e `README.md` | Fase 1 ✅ |
 | 2026-10-01 | Fase 2 | Implementato modulo interno QEMU: schema QAPI (`qapi/autoprotect.json`), header `include/migration/autoprotect.h`, implementazione stub C in `migration/autoprotect.c`, integrazione build in `qapi/meson.build`, `migration/meson.build`, `qapi/qapi-schema.json`. Compilazione e linking verificati, comandi QMP testati live. | Fase 2 ✅ |
+| 2026-10-01 | Fase 3 | Implementata logica interna completa in `migration/autoprotect.c`: gestione `AutoProtectState`, timer `QEMUTimer` su `QEMU_CLOCK_REALTIME`, callback di snapshot periodico via `save_snapshot`, pruning automatico via `delete_snapshot` con salvaguardia snapshot manuali, comandi HMP `autoprotect` e `info autoprotect`. Test di funzionamento live su VM reale superati. | Fase 3 ✅ |
 
 ---
 
@@ -285,19 +286,20 @@ produce un deliverable funzionante e testabile indipendentemente.
 
 ---
 
-### FASE 3 — Modulo Interno QEMU: Logica Timer + Snapshot (Strategia B, parte 2)
+#### FASE 3 — Modulo Interno QEMU: Logica Timer + Snapshot (Strategia B, parte 2)
 **Obiettivo:** Implementare il timer periodico e la logica di snapshot/prune.
-**Stato:** ⬜ Da fare
+**Stato:** ✅ Completata
 **Prerequisiti:** Fase 2 completata
 
 #### Step 3.1 — Struttura stato e timer
-- [ ] Definire in `autoprotect.c` la struttura stato:
+- [x] Definire in `migration/autoprotect.c` la struttura stato:
   ```c
   typedef struct AutoProtectState {
       bool enabled;
       int64_t interval_ms;
       int64_t retention_ms;        /* retention_hours * 3600 * 1000 */
       char *vmstate_node;
+      bool has_devices;
       strList *devices;
       char *name_prefix;
       QEMUTimer *timer;
@@ -305,166 +307,62 @@ produce un deliverable funzionante e testabile indipendentemente.
       uint64_t snapshots_taken;
       uint64_t snapshots_pruned;
       char *last_snapshot_tag;
+      int64_t next_snapshot_time_ms;
       bool snapshot_in_progress;
   } AutoProtectState;
 
   static AutoProtectState autoprotect_state;
   ```
-- [ ] Implementare `qmp_autoprotect_enable()`:
-  1. Validare parametri (interval > 0, retention > 0, devices non vuota)
+- [x] Implementare `qmp_autoprotect_enable()`:
+  1. Validare parametri (interval > 0, retention > 0, devices/vmstate)
   2. Verificare `bdrv_all_can_snapshot()` sui dispositivi indicati
   3. Popolare `autoprotect_state`
   4. Creare timer: `timer_new_ms(QEMU_CLOCK_REALTIME, autoprotect_timer_cb, &autoprotect_state)`
-     — NOTA: uso `QEMU_CLOCK_REALTIME` e non `VIRTUAL` perché `VIRTUAL` si ferma
-     quando la VM è in pausa e il callback del timer chiama `vm_stop()` che
-     fermerebbe il clock stesso. Alternativa: `QEMU_CLOCK_REALTIME` con check
-     `runstate_is_running()` nel callback.
   5. Armare timer: `timer_mod(timer, qemu_clock_get_ms(...) + interval_ms)`
-- [ ] Implementare `qmp_autoprotect_disable()`:
+- [x] Implementare `qmp_autoprotect_disable()`:
   1. `timer_del(timer)` + `timer_free(timer)`
   2. Reset stato
-- [ ] Implementare `qmp_autoprotect_status()`:
+- [x] Implementare `qmp_autoprotect_status()`:
   1. Popolare e ritornare `AutoProtectInfo`
 - **File:** `migration/autoprotect.c`
 - **Test:** Abilitare via QMP, verificare che `autoprotect-status` riporti stato corretto.
-  Il timer non fa ancora nulla (callback vuoto o log).
 - **Criteri di accettazione:**
   - `autoprotect-enable` con parametri validi non ritorna errore
   - `autoprotect-status` riporta `enabled: true` e configurazione
   - `autoprotect-disable` resetta lo stato
 
 #### Step 3.2 — Timer callback: creazione snapshot
-- [ ] Implementare `autoprotect_timer_cb()`:
-  ```c
-  static void autoprotect_timer_cb(void *opaque)
-  {
-      AutoProtectState *s = opaque;
-
-      if (s->snapshot_in_progress) {
-          /* Snapshot precedente ancora in corso, rimanda */
-          timer_mod(s->timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + RETRY_MS);
-          return;
-      }
-
-      if (!runstate_is_running()) {
-          /* VM non attiva, rimanda */
-          timer_mod(s->timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + RETRY_MS);
-          return;
-      }
-
-      s->snapshot_in_progress = true;
-      char *tag = g_strdup_printf("%s-%lu",
-          s->name_prefix ? s->name_prefix : "autoprotect",
-          (unsigned long)s->snapshot_counter++);
-      char *job_id = g_strdup_printf("autoprotect-save-%lu",
-          (unsigned long)(s->snapshots_taken));
-
-      Error *err = NULL;
-      /* Usa lo stesso path di qmp_snapshot_save() */
-      qmp_snapshot_save(job_id, tag, s->vmstate_node, s->devices, &err);
-      if (err) {
-          error_report_err(err);
-          s->snapshot_in_progress = false;
-      }
-      /* Il completamento verrà gestito via job callback o polling */
-
-      g_free(tag);
-      g_free(job_id);
-
-      /* Re-arm timer */
-      timer_mod(s->timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + s->interval_ms);
-  }
-  ```
-- [ ] **Problema da risolvere:** `qmp_snapshot_save()` crea un Job asincrono, ma
-  la callback del timer gira nel main loop. Bisogna intercettare il completamento
-  del job per:
-  - Settare `snapshot_in_progress = false`
-  - Aggiornare `last_snapshot_tag` e `snapshots_taken`
-  - Avviare la fase di pruning
-  - **Opzioni:**
-    - A) Usare `job_completed` callback (se il JobDriver lo supporta)
-    - B) Registrare un notifier su `JOB_STATUS_CHANGE`
-    - C) Chiamare direttamente `save_snapshot()` (sincrono, più semplice ma
-         blocca il main loop durante tutto il dump — accettabile qui perché
-         `save_snapshot()` fa `vm_stop()` comunque)
-    - **Scelta raccomandata:** Opzione C per la Fase 3 (semplicità).
-      Si ristruttura in Fase 4 per il path non-blocking.
-- [ ] Con opzione C, il callback diventa:
-  ```c
-  static void autoprotect_timer_cb(void *opaque) {
-      /* ... validazioni ... */
-      Error *err = NULL;
-      bool ok = save_snapshot(tag, false, s->vmstate_node,
-                              true, s->devices, &err);
-      if (ok) {
-          g_free(s->last_snapshot_tag);
-          s->last_snapshot_tag = g_strdup(tag);
-          s->snapshots_taken++;
-      } else {
-          error_report_err(err);
-      }
-      s->snapshot_in_progress = false;
-      /* Re-arm timer */
-      timer_mod(s->timer, ...);
-  }
-  ```
+- [x] Implementare `autoprotect_timer_cb()`:
+  - Verifica se la VM è in stato running (`runstate_is_running()`)
+  - Gestione snapshot in corso con retry dopo 5 secondi
+  - Generazione automatica tag con timestamp: `<prefix>YYYYMMDD-HHMMSS`
+  - Invocazione di `save_snapshot()` sincrona (RAM + dischi)
+  - Notifica tramite `info_report()`
+  - Re-arm automatico del timer periodico
 - **Criteri di accettazione:**
-  - Dopo aver abilitato con `interval-seconds: 60`, ogni 60s viene creato uno snapshot
-  - Gli snapshot hanno nomi sequenziali `autoprotect-0`, `autoprotect-1`, ...
+  - Dopo aver abilitato AutoProtect, ad ogni intervallo viene creato uno snapshot
+  - Gli snapshot hanno nomi sequenziali basati su timestamp
   - `autoprotect-status` mostra `snapshots-taken` incrementale
 
 #### Step 3.3 — Pruning automatico degli snapshot vecchi
-- [ ] Dopo ogni snapshot riuscito, invocare `autoprotect_prune()`:
-  ```c
-  static void autoprotect_prune(AutoProtectState *s)
-  {
-      /* 1. Ottenere la lista snapshot dal block device vmstate */
-      BlockDriverState *bs = bdrv_all_find_vmstate_bs(s->vmstate_node,
-                                                       true, s->devices, NULL);
-      if (!bs) return;
-
-      QEMUSnapshotInfo *sn_tab = NULL;
-      int nb = bdrv_snapshot_list(bs, &sn_tab);
-      if (nb <= 0) return;
-
-      int64_t now_sec = time(NULL);   /* oppure g_get_real_time() / G_USEC_PER_SEC */
-      int64_t retention_sec = s->retention_ms / 1000;
-
-      for (int i = 0; i < nb; i++) {
-          /* Filtra solo snapshot con il nostro prefisso */
-          if (!g_str_has_prefix(sn_tab[i].name, s->name_prefix ?: "autoprotect")) {
-              continue;
-          }
-          int64_t age_sec = now_sec - (int64_t)sn_tab[i].date_sec;
-          if (age_sec > retention_sec) {
-              Error *err = NULL;
-              bdrv_all_delete_snapshot(sn_tab[i].name,
-                                       true, s->devices, &err);
-              if (err) {
-                  error_report_err(err);
-              } else {
-                  s->snapshots_pruned++;
-              }
-          }
-      }
-      g_free(sn_tab);
-  }
-  ```
-- [ ] Chiamare `autoprotect_prune(s)` nel callback dopo snapshot riuscito
-- [ ] ATTENZIONE: `bdrv_all_delete_snapshot()` richiede `GRAPH_UNLOCKED`
-  (vedi `include/block/snapshot.h:93-95`). Verificare che il contesto di
-  esecuzione della callback del timer abbia i lock corretti.
+- [x] Dopo ogni snapshot riuscito, invocare `autoprotect_prune()`:
+  - Recupero lista snapshot tramite `bdrv_snapshot_list()` dal nodo vmstate
+  - Filtraggio per prefisso configurato (default `autoprotect-`)
+  - Calcolo dell'età: `now - date_sec`
+  - Eliminazione degli snapshot scaduti tramite `delete_snapshot()`
+  - Salvaguardia totale di tutti gli snapshot manuali dell'utente
 - **Criteri di accettazione:**
-  - Con `retention-hours: 1`, snapshot più vecchi di 1 ora vengono eliminati
-  - Solo snapshot con prefisso `autoprotect-` vengono eliminati
-  - Snapshot manuali non vengono toccati
+  - Gli snapshot più vecchi della retention vengono eliminati
+  - Solo gli snapshot con prefisso AutoProtect vengono eliminati
+  - Gli snapshot manuali dell'utente non vengono toccati
 
-#### Step 3.4 — Comandi HMP (opzionale)
-- [ ] Aggiungere comandi HMP in `migration/migration-hmp-cmds.c`:
-  - `autoprotect on <interval-sec> <retention-hours> [prefix]`
+#### Step 3.4 — Comandi HMP
+- [x] Aggiungere comandi HMP in `migration/migration-hmp-cmds.c`:
+  - `autoprotect on [interval-sec] [retention-hours] [prefix] [vmstate]`
   - `autoprotect off`
-  - `autoprotect status` / `info autoprotect`
-- [ ] Registrare in `hmp-commands.hx`
+  - `info autoprotect`
+- [x] Dichiarare in `include/monitor/hmp.h`
+- [x] Registrare in `hmp-commands.hx` e `hmp-commands-info.hx`
 - **Criteri di accettazione:**
   - Dal monitor HMP si può abilitare/disabilitare/controllare AutoProtect
 

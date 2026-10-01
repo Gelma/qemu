@@ -102,6 +102,8 @@ void hmp_balloon(MonitorHMP *hmp, const QDict *qdict);
 void hmp_loadvm(MonitorHMP *hmp, const QDict *qdict);
 void hmp_savevm(MonitorHMP *hmp, const QDict *qdict);
 void hmp_delvm(MonitorHMP *hmp, const QDict *qdict);
+void hmp_autoprotect(MonitorHMP *hmp, const QDict *qdict);
+void hmp_info_autoprotect(MonitorHMP *hmp, const QDict *qdict);
 void hmp_migrate_cancel(MonitorHMP *hmp, const QDict *qdict);
 void hmp_migrate_continue(MonitorHMP *hmp, const QDict *qdict);
 void hmp_migrate_incoming(MonitorHMP *hmp, const QDict *qdict);
