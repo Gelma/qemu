@@ -8,6 +8,7 @@ are useful for making QEMU interoperate with other software.
 .. toctree::
    :maxdepth: 2
 
+   autoprotect
    barrier
    bitmaps
    dbus

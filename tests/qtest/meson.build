@@ -20,6 +20,7 @@ slow_qtests = {
 }
 
 qtests_generic = [
+  'autoprotect-test',
   'cdrom-test',
   'device-introspect-test',
   'machine-none-test',

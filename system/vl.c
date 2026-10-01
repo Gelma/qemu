@@ -85,6 +85,7 @@
 #include "migration/cpr.h"
 #include "migration/misc.h"
 #include "migration/snapshot.h"
+#include "migration/autoprotect.h"
 #include "system/tpm.h"
 #include "system/dma.h"
 #include "hw/audio/model.h"
@@ -2847,6 +2848,8 @@ void qmp_x_exit_preconfig(Error **errp)
         replay_vmstate_init();
     }
 
+    autoprotect_start_cmdline(&error_fatal);
+
     if (incoming) {
         Error *local_err = NULL;
         if (strcmp(incoming, "defer") != 0) {
@@ -3015,6 +3018,9 @@ void qemu_init(int argc, char **argv)
             case QEMU_OPTION_snapshot:
                 snapshot = 1;
                 replay_add_blocker("-snapshot");
+                break;
+            case QEMU_OPTION_autoprotect:
+                autoprotect_parse_cmdline(optarg, &error_fatal);
                 break;
             case QEMU_OPTION_numa:
                 if (!qemu_opts_parse_noisily(qemu_find_opts("numa"),

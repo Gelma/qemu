@@ -14,5 +14,7 @@
 
 void autoprotect_init(void);
 void autoprotect_cleanup(void);
+void autoprotect_parse_cmdline(const char *optarg, Error **errp);
+void autoprotect_start_cmdline(Error **errp);
 
 #endif /* QEMU_MIGRATION_AUTOPROTECT_H */

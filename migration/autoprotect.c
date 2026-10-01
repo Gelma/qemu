@@ -13,6 +13,10 @@
 #include "qapi/qapi-builtin-visit.h"
 #include "qapi/qapi-commands-autoprotect.h"
 #include "qapi/qapi-types-autoprotect.h"
+#include "qapi/qapi-visit-autoprotect.h"
+#include "qapi/qobject-input-visitor.h"
+#include "qemu/keyval.h"
+#include "qobject/qdict.h"
 #include "qapi/qapi-commands-migration.h"
 #include "qapi/qapi-commands-block-core.h"
 #include "migration/autoprotect.h"
@@ -487,6 +491,61 @@ AutoProtectInfo *qmp_autoprotect_status(Error **errp)
     return info;
 }
 
+static AutoProtectConfig *cmdline_config;
+
+void autoprotect_parse_cmdline(const char *optarg, Error **errp)
+{
+    QDict *dict = keyval_parse(optarg, "interval-seconds", NULL, errp);
+    if (!dict) {
+        return;
+    }
+
+    /* Support convenient CLI aliases */
+    QObject *val = qdict_get(dict, "interval");
+    if (val && !qdict_haskey(dict, "interval-seconds")) {
+        qobject_ref(val);
+        qdict_put_obj(dict, "interval-seconds", val);
+        qdict_del(dict, "interval");
+    }
+
+    val = qdict_get(dict, "retention");
+    if (val && !qdict_haskey(dict, "retention-hours")) {
+        qobject_ref(val);
+        qdict_put_obj(dict, "retention-hours", val);
+        qdict_del(dict, "retention");
+    }
+
+    val = qdict_get(dict, "dir");
+    if (val && !qdict_haskey(dict, "storage-dir")) {
+        qobject_ref(val);
+        qdict_put_obj(dict, "storage-dir", val);
+        qdict_del(dict, "dir");
+    }
+
+    val = qdict_get(dict, "prefix");
+    if (val && !qdict_haskey(dict, "name-prefix")) {
+        qobject_ref(val);
+        qdict_put_obj(dict, "name-prefix", val);
+        qdict_del(dict, "prefix");
+    }
+
+    Visitor *v = qobject_input_visitor_new_keyval(QOBJECT(dict));
+    qobject_unref(dict);
+
+    qapi_free_AutoProtectConfig(cmdline_config);
+    cmdline_config = NULL;
+
+    visit_type_AutoProtectConfig(v, NULL, &cmdline_config, errp);
+    visit_free(v);
+}
+
+void autoprotect_start_cmdline(Error **errp)
+{
+    if (cmdline_config) {
+        qmp_autoprotect_enable(cmdline_config, errp);
+    }
+}
+
 void autoprotect_init(void)
 {
 }
@@ -496,4 +555,7 @@ void autoprotect_cleanup(void)
     autoprotect_disable_internal();
     g_free(autoprotect_state.last_snapshot_tag);
     autoprotect_state.last_snapshot_tag = NULL;
+    qapi_free_AutoProtectConfig(cmdline_config);
+    cmdline_config = NULL;
 }
+
