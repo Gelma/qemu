@@ -7,8 +7,9 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Features from ./configure --help "Optional features, enabled with --enable-FEATURE and"
 # that are verified to pass configure on this system.
-# (Total: 107 enabled features)
+# (Total: 116 enabled features)
 readonly ENABLED_FEATURES=(
+    af-xdp
     alsa
     attr
     auth-pam
@@ -17,6 +18,7 @@ readonly ENABLED_FEATURES=(
     brlapi
     bzip2
     cap-ng
+    capstone
     cloop
     colo-proxy
     crypto-afalg
@@ -40,6 +42,8 @@ readonly ENABLED_FEATURES=(
     keyring
     kvm
     l2tpv3
+    libcbor
+    libdaxctl
     libdw
     libiscsi
     libkeyutils
@@ -51,6 +55,7 @@ readonly ENABLED_FEATURES=(
     libvduse
     linux-aio
     linux-io-uring
+    lzfse
     lzo
     malloc-trim
     membarrier
@@ -74,6 +79,7 @@ readonly ENABLED_FEATURES=(
     rdma
     replication
     sdl
+    sdl-image
     seccomp
     selinux
     slirp
@@ -81,6 +87,7 @@ readonly ENABLED_FEATURES=(
     smartcard
     snappy
     sndio
+    sparse
     spice
     spice-protocol
     stack-protector
@@ -90,8 +97,10 @@ readonly ENABLED_FEATURES=(
     tpm
     usb-redir
     valgrind
+    vde
     vdi
     vduse-blk-export
+    vfio-user-server
     vhdx
     vhost-crypto
     vhost-kernel
