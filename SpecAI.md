@@ -473,10 +473,12 @@ produce un deliverable funzionante e testabile indipendentemente.
 - [x] Registrazione in `qemu-options.hx` con manuale rST
 - [x] Parsing keyval in `migration/autoprotect.c` (`autoprotect_parse_cmdline`) con supporto alias facili (`interval`, `retention`, `dir`, `prefix`)
 - [x] Avvio automatico post-creazione macchina in `system/vl.c` (`autoprotect_start_cmdline`)
+- [x] Creati script `autoprotect_start.sh` (avvio VM con 3GB RAM, snapshot ogni 60s, retention 1h) e `autoprotect_stop.sh` (arresto graceful tramite PID)
 - **Criteri di accettazione:**
-  - La VM può essere avviata specificando frequenza e retention direttamente da CLI senza script esterni
+  - La VM può essere avviata specificando frequenza e retention direttamente da CLI o tramite script helper
+  - `autoprotect_start.sh` accetta il file qcow2 e avvia la VM con 3GB RAM e snapshot al minuto con retention di 1h
 
-**Deliverable Fase 5:** Modulo production-ready completo di test automatici, documentazione ufficiale e supporto CLI.
+**Deliverable Fase 5:** Modulo production-ready completo di test automatici, documentazione ufficiale, supporto CLI e script di gestione.
 **Sforzo completato:** Fase completata e verificata.
 
 ---
