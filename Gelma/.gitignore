@@ -1,0 +1,9 @@
+ubuntu-26.04/*.iso
+ubuntu-26.04/*.qcow2
+ubuntu-26.04/*.fd
+ubuntu-26.04/*.log
+ubuntu-26.04/*.ports
+ubuntu-26.04/*.pid
+ubuntu-26.04/*.sock
+ubuntu-26.04/*.socket
+ubuntu-26.04/*.sh
