@@ -37,17 +37,15 @@ main() {
         exit 1
     fi
 
-    # Determina il percorso del binario QEMU compilato
+    # Determina il percorso del binario QEMU compilato localmente (mai quello di sistema)
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local qemu_bin="${script_dir}/build/qemu-system-x86_64"
 
-    local qemu_bin=""
-    if [[ -x "${script_dir}/build/qemu-system-x86_64" ]]; then
-        qemu_bin="${script_dir}/build/qemu-system-x86_64"
-    elif command -v qemu-system-x86_64 >/dev/null 2>&1; then
-        qemu_bin="$(command -v qemu-system-x86_64)"
-    else
-        echo "Errore: binario qemu-system-x86_64 non trovato in ${script_dir}/build/ o in PATH." >&2
+    if [[ ! -x "$qemu_bin" ]]; then
+        echo "Errore: binario QEMU compilato localmente non trovato o non eseguibile in:" >&2
+        echo "  $qemu_bin" >&2
+        echo "Compilare il progetto prima di avviare la VM (es. con 'ninja -C build qemu-system-x86_64' o 'make')." >&2
         exit 1
     fi
 
