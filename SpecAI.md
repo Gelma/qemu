@@ -489,3 +489,6 @@ Analisi     Script      QAPI +      Timer +     Live       Hardening
 - Prima di ogni sessione futura: **rileggere questo file** per riprendere dal punto giusto.
 - I numeri di riga possono cambiare se il codebase viene aggiornato (`git pull`).
   In tal caso, cercare per nome funzione.
+- Formattazione schema QAPI: i titoli di sezione nei commenti liberi devono usare intestazioni
+  di livello 2 con asterischi (`*` sopra e sotto), poiché il livello 1 (`=`) è riservato
+  al titolo principale del manuale Sphinx (`docs/devel/qapi-code-gen.rst`).
