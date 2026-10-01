@@ -9,6 +9,25 @@
 ##
 
 ##
+# @AutoProtectMode:
+#
+# Execution mode for automated snapshots.
+#
+# @auto: Automatically select 'live' if UFFD-WP is supported by host
+#     kernel, otherwise fall back to 'internal'.
+#
+# @internal: Use internal qcow2 snapshots (RAM and disks saved
+#     synchronously while VM is paused).
+#
+# @live: Use non-blocking background snapshot (UFFD-WP memory
+#     tracking and external disk overlays without stopping the VM).
+#
+# Since: 11.2
+##
+{ 'enum': 'AutoProtectMode',
+  'data': [ 'auto', 'internal', 'live' ] }
+
+##
 # @AutoProtectConfig:
 #
 # Configuration settings for automated periodic snapshot protection.
@@ -28,6 +47,12 @@
 # @name-prefix: Optional custom prefix for generated snapshot tags
 #     (default: 'autoprotect-').
 #
+# @mode: Execution mode ('auto', 'internal', or 'live').
+#     Defaults to 'auto'.
+#
+# @storage-dir: Directory path used to store live RAM state files and
+#     external overlays in live mode (default: '/tmp').
+#
 # Since: 11.2
 ##
 { 'struct': 'AutoProtectConfig',
@@ -35,7 +60,9 @@
             'retention-hours': 'int',
             '*vmstate': 'str',
             '*devices': ['str'],
-            '*name-prefix': 'str' } }
+            '*name-prefix': 'str',
+            '*mode': 'AutoProtectMode',
+            '*storage-dir': 'str' } }
 
 ##
 # @AutoProtectInfo:
@@ -46,6 +73,10 @@
 #     active.
 #
 # @config: Active configuration parameters if enabled.
+#
+# @active-mode: Operational mode currently in effect.
+#
+# @storage-dir: Directory path configured for live snapshots.
 #
 # @next-snapshot-seconds: Estimated seconds remaining until next
 #     snapshot attempt.
@@ -64,6 +95,8 @@
 { 'struct': 'AutoProtectInfo',
   'data': { 'enabled': 'bool',
             '*config': 'AutoProtectConfig',
+            '*active-mode': 'AutoProtectMode',
+            '*storage-dir': 'str',
             '*next-snapshot-seconds': 'int',
             '*last-snapshot-tag': 'str',
             '*snapshots-taken': 'int',
@@ -78,7 +111,7 @@
 # Errors:
 #     - If @interval-seconds is less than or equal to 0.
 #     - If @retention-hours is less than or equal to 0.
-#     - If @devices list is empty.
+#     - If live mode is requested but host kernel lacks UFFD-WP.
 #
 # Since: 11.2
 #
@@ -88,8 +121,7 @@
 #          "arguments": {
 #             "interval-seconds": 1800,
 #             "retention-hours": 24,
-#             "vmstate": "drive0",
-#             "devices": ["drive0"]
+#             "mode": "live"
 #          }
 #        }
 #     <- { "return": {} }
@@ -126,6 +158,7 @@
 #
 #     -> { "execute": "autoprotect-status" }
 #     <- { "return": { "enabled": true,
+#                      "active-mode": "live",
 #                      "next-snapshot-seconds": 1200,
 #                      "snapshots-taken": 3,
 #                      "snapshots-pruned": 1 } }

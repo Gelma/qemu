@@ -395,14 +395,14 @@ ERST
 
     {
         .name       = "autoprotect",
-        .args_type  = "action:s,interval:i?,retention:i?,prefix:s?,vmstate:s?",
-        .params     = "on|off [interval-sec] [retention-hours] [prefix] [vmstate]",
+        .args_type  = "action:s,interval:i?,retention:i?,mode:s?,prefix:s?,vmstate:s?,dir:s?",
+        .params     = "on|off [interval-sec] [retention-hours] [mode] [prefix] [vmstate] [dir]",
         .help       = "enable or disable AutoProtect periodic snapshots",
         .cmd        = hmp_autoprotect,
     },
 
 SRST
-``autoprotect`` *on|off* [*interval*] [*retention*] [*prefix*] [*vmstate*]
+``autoprotect`` *on|off* [*interval*] [*retention*] [*mode*] [*prefix*] [*vmstate*] [*dir*]
   Enable or disable AutoProtect periodic automated snapshots.
 ERST
 

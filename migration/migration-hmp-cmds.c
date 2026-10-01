@@ -521,6 +521,10 @@ void hmp_info_autoprotect(MonitorHMP *hmp, const QDict *qdict)
     monitor_hmp_printf(hmp, "AutoProtect: %s\n",
                        info->enabled ? "enabled" : "disabled");
     if (info->enabled && info->config) {
+        if (info->has_active_mode) {
+            monitor_hmp_printf(hmp, "  Active Mode:   %s\n",
+                               AutoProtectMode_str(info->active_mode));
+        }
         monitor_hmp_printf(hmp, "  Interval:      %" PRId64 " seconds\n",
                            info->config->interval_seconds);
         monitor_hmp_printf(hmp, "  Retention:     %" PRId64 " hours\n",
@@ -532,6 +536,10 @@ void hmp_info_autoprotect(MonitorHMP *hmp, const QDict *qdict)
         if (info->config->name_prefix) {
             monitor_hmp_printf(hmp, "  Prefix:        %s\n",
                                info->config->name_prefix);
+        }
+        if (info->storage_dir) {
+            monitor_hmp_printf(hmp, "  Storage Dir:   %s\n",
+                               info->storage_dir);
         }
         if (info->has_next_snapshot_seconds) {
             monitor_hmp_printf(hmp, "  Next Snapshot: in %" PRId64 " seconds\n",
@@ -562,17 +570,33 @@ void hmp_autoprotect(MonitorHMP *hmp, const QDict *qdict)
     if (strcmp(action, "off") == 0 || strcmp(action, "disable") == 0) {
         qmp_autoprotect_disable(&err);
     } else if (strcmp(action, "on") == 0 || strcmp(action, "enable") == 0) {
+        const char *mode_str = qdict_get_try_str(qdict, "mode");
+        bool has_mode = false;
+        AutoProtectMode mode = AUTO_PROTECT_MODE_AUTO;
+        if (mode_str) {
+            int val = qapi_enum_parse(&AutoProtectMode_lookup, mode_str, -1, &err);
+            if (val < 0) {
+                hmp_handle_error(hmp, err);
+                return;
+            }
+            mode = val;
+            has_mode = true;
+        }
+
         AutoProtectConfig config = {
             .interval_seconds = qdict_get_try_int(qdict, "interval", 1800),
             .retention_hours = qdict_get_try_int(qdict, "retention", 24),
             .vmstate = (char *)qdict_get_try_str(qdict, "vmstate"),
             .name_prefix = (char *)qdict_get_try_str(qdict, "prefix"),
+            .has_mode = has_mode,
+            .mode = mode,
+            .storage_dir = (char *)qdict_get_try_str(qdict, "dir"),
         };
         qmp_autoprotect_enable(&config, &err);
     } else {
         monitor_hmp_printf(hmp,
             "Usage: autoprotect on|off [interval-sec] [retention-hours] "
-            "[prefix] [vmstate]\n");
+            "[mode] [prefix] [vmstate] [dir]\n");
         return;
     }
 
