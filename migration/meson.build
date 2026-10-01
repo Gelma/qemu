@@ -10,6 +10,7 @@ migration_files = files(
 )
 
 system_ss.add(files(
+  'autoprotect.c',
   'block-dirty-bitmap.c',
   'block-active.c',
   'channel.c',

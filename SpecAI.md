@@ -20,6 +20,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 |:-----|:-----|:--------------------|:----------------|
 | 2026-10-01 | Analisi | Analisi fattibilità completa, 3 strategie identificate (A/B/C) | Fase 0 ✅ |
 | 2026-10-01 | Fase 1 | Implementato tool AutoProtect autonomo: `tools/autoprotect/autoprotect.py` (QMP client nativo, daemon, oneshot, list, prune, discovery), `start.sh`, `stop.sh`, `Makefile`, unit test `test_autoprotect.py`, systemd service/timer e `README.md` | Fase 1 ✅ |
+| 2026-10-01 | Fase 2 | Implementato modulo interno QEMU: schema QAPI (`qapi/autoprotect.json`), header `include/migration/autoprotect.h`, implementazione stub C in `migration/autoprotect.c`, integrazione build in `qapi/meson.build`, `migration/meson.build`, `qapi/qapi-schema.json`. Compilazione e linking verificati, comandi QMP testati live. | Fase 2 ✅ |
 
 ---
 
@@ -191,11 +192,11 @@ produce un deliverable funzionante e testabile indipendentemente.
 
 ### FASE 2 — Modulo Interno QEMU: Schema QAPI (Strategia B, parte 1)
 **Obiettivo:** Definire l'interfaccia QMP per AutoProtect e il boilerplate C.
-**Stato:** ⬜ Da fare
+**Stato:** ✅ Completata
 **Prerequisiti:** Fase 1 completata (per avere esperienza operativa sul flusso)
 
 #### Step 2.1 — Definizione schema QAPI
-- [ ] Creare `qapi/autoprotect.json` con:
+- [x] Creare `qapi/autoprotect.json` con:
   ```json
   { 'struct': 'AutoProtectConfig',
     'data': {
@@ -208,7 +209,8 @@ produce un deliverable funzionante e testabile indipendentemente.
   }
 
   { 'command': 'autoprotect-enable',
-    'data': 'AutoProtectConfig' }
+    'data': 'AutoProtectConfig',
+    'boxed': true }
 
   { 'command': 'autoprotect-disable' }
 
@@ -226,12 +228,12 @@ produce un deliverable funzionante e testabile indipendentemente.
     }
   }
   ```
-- [ ] Aggiungere include in `qapi/qapi-schema.json`:
+- [x] Aggiungere include in `qapi/qapi-schema.json`:
   ```json
   { 'include': 'autoprotect.json' }
   ```
-- [ ] Verificare che `meson.build` generi i file QAPI
-- **File:** `qapi/autoprotect.json`, `qapi/qapi-schema.json`
+- [x] Verificare che `meson.build` generi i file QAPI
+- **File:** `qapi/autoprotect.json`, `qapi/qapi-schema.json`, `qapi/meson.build`
 - **Test:** `make` deve compilare senza errori; i file `qapi-types-autoprotect.*`
   e `qapi-commands-autoprotect.*` devono essere generati
 - **Criteri di accettazione:**
@@ -239,10 +241,10 @@ produce un deliverable funzionante e testabile indipendentemente.
   - I tipi C vengono generati correttamente
 
 #### Step 2.2 — Stub delle implementazioni C
-- [ ] Creare `migration/autoprotect.h`:
+- [x] Creare `include/migration/autoprotect.h`:
   ```c
-  #ifndef QEMU_AUTOPROTECT_H
-  #define QEMU_AUTOPROTECT_H
+  #ifndef QEMU_MIGRATION_AUTOPROTECT_H
+  #define QEMU_MIGRATION_AUTOPROTECT_H
 
   #include "qapi/qapi-types-autoprotect.h"
 
@@ -251,16 +253,16 @@ produce un deliverable funzionante e testabile indipendentemente.
 
   #endif
   ```
-- [ ] Creare `migration/autoprotect.c` con stub:
+- [x] Creare `migration/autoprotect.c` con stub:
   ```c
   void qmp_autoprotect_enable(AutoProtectConfig *config, Error **errp)
   {
-      error_setg(errp, "AutoProtect not yet implemented");
+      error_setg(errp, "AutoProtect not yet implemented (Phase 2 stub)");
   }
 
   void qmp_autoprotect_disable(Error **errp)
   {
-      error_setg(errp, "AutoProtect not yet implemented");
+      error_setg(errp, "AutoProtect not yet implemented (Phase 2 stub)");
   }
 
   AutoProtectInfo *qmp_autoprotect_status(Error **errp)
@@ -270,12 +272,13 @@ produce un deliverable funzionante e testabile indipendentemente.
       return info;
   }
   ```
-- [ ] Aggiungere `autoprotect.c` a `migration/meson.build`
-- [ ] Verificare compilazione e linking
-- **File:** `migration/autoprotect.h`, `migration/autoprotect.c`, `migration/meson.build`
+- [x] Aggiungere `autoprotect.c` a `migration/meson.build`
+- [x] Verificare compilazione e linking
+- **File:** `include/migration/autoprotect.h`, `migration/autoprotect.c`, `migration/meson.build`
 - **Criteri di accettazione:**
-  - `make` compila senza errori
+  - `ninja -C build qemu-system-x86_64` compila e linka senza errori
   - Da QMP: `{ "execute": "autoprotect-status" }` ritorna `{ "enabled": false }`
+  - Da QMP: `autoprotect-enable` e `autoprotect-disable` rispondono con messaggio di stub
 
 **Deliverable Fase 2:** Schema QAPI + stub C compilabili. Comandi QMP rispondono.
 **Sforzo stimato:** 1-2 giorni.

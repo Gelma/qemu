@@ -23,6 +23,7 @@ endif
 
 qapi_all_modules = [
   'authz',
+  'autoprotect',
   'block',
   'block-core',
   'block-export',

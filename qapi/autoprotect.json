@@ -1,0 +1,133 @@
+# -*- Mode: Python -*-
+# vim: filetype=python
+#
+
+##
+# ===================
+# AutoProtect feature
+# ===================
+##
+
+##
+# @AutoProtectConfig:
+#
+# Configuration settings for automated periodic snapshot protection.
+#
+# @interval-seconds: Interval between snapshot creation cycles
+#     in seconds.
+#
+# @retention-hours: Number of hours after which AutoProtect snapshots
+#     expire and are pruned.
+#
+# @vmstate: Node name of the block device used to store VM RAM state.
+#
+# @devices: List of block device node names to include in each
+#     snapshot.
+#
+# @name-prefix: Optional custom prefix for generated snapshot tags
+#     (default: 'autoprotect-').
+#
+# Since: 11.2
+##
+{ 'struct': 'AutoProtectConfig',
+  'data': { 'interval-seconds': 'int',
+            'retention-hours': 'int',
+            'vmstate': 'str',
+            'devices': ['str'],
+            '*name-prefix': 'str' } }
+
+##
+# @AutoProtectInfo:
+#
+# Live operational status of the AutoProtect subsystem.
+#
+# @enabled: True if AutoProtect periodic snapshots are currently
+#     active.
+#
+# @config: Active configuration parameters if enabled.
+#
+# @next-snapshot-seconds: Estimated seconds remaining until next
+#     snapshot attempt.
+#
+# @last-snapshot-tag: Tag identifier of the most recently created
+#     snapshot.
+#
+# @snapshots-taken: Total number of AutoProtect snapshots created
+#     since VM start.
+#
+# @snapshots-pruned: Total number of expired snapshots automatically
+#     deleted.
+#
+# Since: 11.2
+##
+{ 'struct': 'AutoProtectInfo',
+  'data': { 'enabled': 'bool',
+            '*config': 'AutoProtectConfig',
+            '*next-snapshot-seconds': 'int',
+            '*last-snapshot-tag': 'str',
+            '*snapshots-taken': 'int',
+            '*snapshots-pruned': 'int' } }
+
+##
+# @autoprotect-enable:
+#
+# Configure and activate periodic automated snapshots (RAM and
+# storage) with automatic retention pruning.
+#
+# Errors:
+#     - If @interval-seconds is less than or equal to 0.
+#     - If @retention-hours is less than or equal to 0.
+#     - If @devices list is empty.
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "autoprotect-enable",
+#          "arguments": {
+#             "interval-seconds": 1800,
+#             "retention-hours": 24,
+#             "vmstate": "drive0",
+#             "devices": ["drive0"]
+#          }
+#        }
+#     <- { "return": {} }
+##
+{ 'command': 'autoprotect-enable',
+  'data': 'AutoProtectConfig',
+  'boxed': true }
+
+##
+# @autoprotect-disable:
+#
+# Deactivate periodic automated snapshots and cancel
+# scheduled timers.
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "autoprotect-disable" }
+#     <- { "return": {} }
+##
+{ 'command': 'autoprotect-disable' }
+
+##
+# @autoprotect-status:
+#
+# Query current configuration and operational status of AutoProtect.
+#
+# Returns: @AutoProtectInfo
+#
+# Since: 11.2
+#
+# .. qmp-example::
+#
+#     -> { "execute": "autoprotect-status" }
+#     <- { "return": { "enabled": true,
+#                      "next-snapshot-seconds": 1200,
+#                      "snapshots-taken": 3,
+#                      "snapshots-pruned": 1 } }
+##
+{ 'command': 'autoprotect-status',
+  'returns': 'AutoProtectInfo' }
