@@ -23,6 +23,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | 2026-10-01 | Fase 2 | Implementato modulo interno QEMU: schema QAPI (`qapi/autoprotect.json`), header `include/migration/autoprotect.h`, implementazione stub C in `migration/autoprotect.c`, integrazione build in `qapi/meson.build`, `migration/meson.build`, `qapi/qapi-schema.json`. Compilazione e linking verificati, comandi QMP testati live. | Fase 2 ✅ |
 | 2026-10-01 | Fase 3 | Implementata logica interna completa in `migration/autoprotect.c`: gestione `AutoProtectState`, timer `QEMUTimer` su `QEMU_CLOCK_REALTIME`, callback di snapshot periodico via `save_snapshot`, pruning automatico via `delete_snapshot` con salvaguardia snapshot manuali, comandi HMP `autoprotect` e `info autoprotect`. Test di funzionamento live su VM reale superati. | Fase 3 ✅ |
 | 2026-10-01 | Tooling | Creato e aggiornato script `configure_max.sh` che lancia `./configure --prefix="/opt/qemu"` abilitando 116 feature opzionali supportate e compilabili sul laptop (aggiunte 9 nuove opzioni a seguito dell'installazione delle relative librerie di sviluppo: `af-xdp`, `capstone`, `libcbor`, `libdaxctl`, `lzfse`, `sdl-image`, `sparse`, `vde`, `vfio-user-server`). | Tooling ✅ |
+| 2026-10-06 | Fase 6 | Eliminazione blocco VM guest durante snapshot: salvataggio delta storage + RAM nella directory del disco base via COW (`fork()` asincrono con `MADV_DOFORK`), scheduling cancellazione notturna (`night-prune` 23:00-06:00), script di supporto ripristino ed elenco snapshot (`autoprotect_restore.sh`), configurazione bridge/macvtap su `eth0` (`setup_bridge.sh` e `autoprotect_start.sh`). | Fase 6 ✅ |
 
 ---
 
@@ -486,17 +487,46 @@ produce un deliverable funzionante e testabile indipendentemente.
 
 ---
 
+### FASE 6 — Live Delta Non-Blocking, Night Prune, Ripristino e Bridge eth0 ✅ COMPLETATA
+**Obiettivo:** Eliminare completamente qualsiasi percezione di blocco della VM durante lo snapshot periodico, salvare i delta nella cartella del qcow2, schedulare il pruning solo di notte, fornire uno script per listing/ripristino snapshot e collegare la VM alla LAN fisica via bridge su `eth0`.
+**Stato:** ✅ Completata
+
+#### Step 6.1 — Delta Storage e RAM nella cartella del qcow2 (senza blocco guest)
+- [x] Auto-rilevamento directory di base (`autoprotect_detect_base_dir` con `g_canonicalize_filename`) per collocare overlay disco e dump RAM direttamente a fianco del file qcow2 specificato.
+- [x] Salvataggio storage live: creazione overlay delta copy-on-write tramite `qmp_blockdev_snapshot_sync` a runtime senza fermare la VM.
+- [x] Salvataggio RAM asincrono: micro-pausa (<3ms) per catturare i registri hardware/device state (`qmp_xen_save_devices_state`), applicazione di `MADV_DOFORK` sui RAMBlocks migrabili, `fork()` istantaneo di un processo figlio per il dump asincrono su file `.state` a blocchi da 4MB, ripristino immediato della VM nel processo genitore con `vm_start()` e ripristino del flag di sicurezza `MADV_DONTFORK`. La VM riprende in pochi millisecondi senza blocco percettibile.
+
+#### Step 6.2 — Scheduling cancellazione notturna (`night-prune`)
+- [x] Aggiunto parametro `night-prune` nello schema QAPI (`qapi/autoprotect.json`), CLI (`-autoprotect night-prune=on`), e monitor HMP.
+- [x] Funzione `autoprotect_is_night_time()` che controlla l'orario locale (ore 23:00 - 06:00).
+- [x] Durante le ore diurne (06:00 - 22:59), la cancellazione degli snapshot scaduti viene posticipata per evitare contese I/O; allo scoccare delle ore notturne, il timer periodico effettua la pulizia massiva di tutti gli snapshot oltre la retention.
+
+#### Step 6.3 — Script di supporto per elenco e ripristino snapshot (`autoprotect_restore.sh`)
+- [x] Script interattivo e a riga di comando `autoprotect_restore.sh <file.qcow2> [--list] [--snapshot <tag|num>]`.
+- [x] Rilevamento automatico sia di snapshot live delta esterni (`*-disk-*.qcow2`, `*-ram.state`) sia di snapshot interni qcow2 (`qemu-img snapshot -l`).
+- [x] Tabella formattata con numero progressivo, tag, tipologia, data/ora e dimensione RAM/overlay.
+- [x] Selezione ed esecuzione dello snapshot scelto:
+  - Per snapshot live delta: avvio della VM tramite `build/qemu-system-x86_64` con opzione di overlay di sicurezza per non alterare lo snapshot storico.
+  - Per snapshot interni: avvio con `-loadvm <tag>` (ripristino memoria e CPU) o ripristino del disco con `qemu-img snapshot -a <tag>`.
+
+#### Step 6.4 — Connessione di rete in bridge su `eth0`
+- [x] Creato script helper `setup_bridge.sh` per configurare rapidamente `macvtap0` su `eth0` in modalità bridge (o Linux bridge `br0`) con permessi appropriati per utente non-root.
+- [x] Aggiornato `autoprotect_start.sh` con supporto a rete bridged (`macvtap0` su `eth0` o bridge Linux `br0`), MAC address personalizzato o persistente, supporto `--night-prune` e fallback trasparente a user mode se il bridge non è ancora presente.
+- [x] La VM ottiene un indirizzo IP indipendente direttamente dal server DHCP della rete LAN fisica.
+
+---
+
 ## Riepilogo Progressione
 
 ```
-FASE 0 ✅   FASE 1 ✅   FASE 2 ✅   FASE 3 ✅   FASE 4 ✅   FASE 5 ✅
-Analisi     Script      QAPI +      Timer +     Live       Hardening &
-            esterno     Stub C      Snapshot    (non-block) Test, Docs,
-            QMP                     + Prune                 CLI Option
-            ────────────────────────────────────────────────────────►
-            Zero                    Media                  Alta
-            invasività              invasività             invasività
-            VM blocca               VM blocca              VM NON blocca
+FASE 0 ✅   FASE 1 ✅   FASE 2 ✅   FASE 3 ✅   FASE 4 ✅   FASE 5 ✅   FASE 6 ✅
+Analisi     Script      QAPI +      Timer +     Live       Hardening & Live Delta,
+            esterno     Stub C      Snapshot    (non-block) Test, Docs, Night-Prune,
+            QMP                     + Prune                 CLI Option  Restore & Bridge
+            ────────────────────────────────────────────────────────────────────────────►
+            Zero                    Media                  Alta         Non-blocking
+            invasività              invasività             invasività   Zero freeze
+            VM blocca               VM blocca              VM NON blocca VM LAN Bridge
 ```
 
 ## Note Importanti
