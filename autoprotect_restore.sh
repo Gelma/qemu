@@ -266,23 +266,34 @@ start_vm_live_delta() {
 
     # Rilevamento rete bridge/macvtap
     local net_opts=()
+    local mac_addr="52:54:00:12:34:56"
     if [[ -e /dev/tap$(cat /sys/class/net/macvtap0/ifindex 2>/dev/null || echo "") && -r /dev/tap$(cat /sys/class/net/macvtap0/ifindex 2>/dev/null || echo "") ]]; then
         local tap_idx
         tap_idx="$(cat /sys/class/net/macvtap0/ifindex)"
+        if [[ -r /sys/class/net/macvtap0/address ]]; then
+            mac_addr="$(cat /sys/class/net/macvtap0/address)"
+        fi
         exec 3<>"/dev/tap${tap_idx}"
-        net_opts=("-netdev" "tap,id=net0,fd=3" "-device" "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56")
+        net_opts=("-netdev" "tap,id=net0,fd=3" "-device" "virtio-net-pci,netdev=net0,mac=${mac_addr}")
     elif ip link show br0 >/dev/null 2>&1; then
-        net_opts=("-netdev" "bridge,id=net0,br=br0${bridge_helper}" "-device" "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56")
+        net_opts=("-netdev" "bridge,id=net0,br=br0${bridge_helper}" "-device" "virtio-net-pci,netdev=net0,mac=${mac_addr}")
     else
         net_opts=("-netdev" "user,id=net0" "-device" "virtio-net-pci,netdev=net0")
     fi
 
+    # Scheda di gestione host SSH locale (porta 10022 -> guest:22)
+    local mgmt_opts=("-netdev" "user,id=net_mgmt,restrict=on,hostfwd=tcp::10022-:22"
+                     "-device" "virtio-net-pci,netdev=net_mgmt")
+
     echo "[Ripristino] Esecuzione QEMU: $qemu_bin"
+    echo "[Ripristino] - Rete LAN:      Bridge macvtap (MAC: $mac_addr)"
+    echo "[Ripristino] - Rete Gestione: SSH locale (ssh -p 10022 gelma@localhost)"
     exec "$qemu_bin" \
         "${accel_opts[@]}" \
         -m 3G \
         -drive "file=${run_disk},format=qcow2,if=virtio" \
-        "${net_opts[@]}"
+        "${net_opts[@]}" \
+        "${mgmt_opts[@]}"
 }
 
 start_vm_internal() {

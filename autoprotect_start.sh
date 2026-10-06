@@ -24,13 +24,16 @@ usage() {
     echo "  --snapshot <tag>      Avvia da uno snapshot specifico della catena delta"
     echo "  --night-prune         Abilita la cancellazione massiva differita solo di notte (23:00 - 06:00)"
     echo "  --bridge <iface>      Specifica l'interfaccia bridge da utilizzare (predefinita: macvtap0 su eth0 oppure br0)"
-    echo "  --mac <indirizzo_mac> Indirizzo MAC personalizzato per la VM (predefinito: 52:54:00:12:34:56)"
+    echo "  --mac <indirizzo_mac> Indirizzo MAC personalizzato per la VM (predefinito: sincronizzato con macvtap0)"
+    echo "  --ssh [porta]         Inoltra porta SSH locale da localhost a guest:22 (predefinita: 10022)"
+    echo "  --no-ssh              Disabilita l'interfaccia di gestione SSH locale"
     echo "  --dry-run             Mostra la configurazione e il comando generato senza avviare la VM"
     echo "  [opzioni_qemu...]     Ulteriori argomenti passati direttamente a QEMU"
     echo ""
     echo "Comportamento predefinito:"
-    echo "  All'avvio, rileva automaticamente l'ultimo overlay (foglia attiva) della catena"
-    echo "  e garantisce il boot dallo stato esatto dell'ultimo snapshot/scrittura!"
+    echo "  - Rileva automaticamente l'ultimo overlay (foglia attiva) della catena e garantisce il boot dall'ultimo stato;"
+    echo "  - Sincronizza l'indirizzo MAC della scheda virtuale con macvtap0 per evitare scarti di pacchetti del kernel;"
+    echo "  - Apre la porta SSH locale 10022 per consentire l'accesso immediato con 'ssh -p 10022 gelma@localhost'."
     echo ""
     echo "Esempi:"
     echo "  $script_name mydisk.qcow2"
@@ -57,6 +60,9 @@ main() {
     local night_prune="off"
     local custom_bridge=""
     local mac_addr="52:54:00:12:34:56"
+    local custom_mac_set=0
+    local enable_ssh_mgmt=1
+    local ssh_port=10022
     local force_base=0
     local target_snapshot=""
     local dry_run=0
@@ -84,6 +90,20 @@ main() {
                 dry_run=1
                 shift
                 ;;
+            --ssh)
+                if [[ $# -ge 2 ]] && [[ "$2" =~ ^[0-9]+$ ]]; then
+                    ssh_port="$2"
+                    enable_ssh_mgmt=1
+                    shift 2
+                else
+                    enable_ssh_mgmt=1
+                    shift
+                fi
+                ;;
+            --no-ssh)
+                enable_ssh_mgmt=0
+                shift
+                ;;
             --bridge)
                 if [[ $# -lt 2 ]]; then
                     echo "Errore: specificare l'interfaccia dopo --bridge." >&2
@@ -98,6 +118,7 @@ main() {
                     exit 1
                 fi
                 mac_addr="$2"
+                custom_mac_set=1
                 shift 2
                 ;;
             -h|--help)
@@ -208,6 +229,14 @@ main() {
         local tap_idx
         tap_idx="$(cat /sys/class/net/macvtap0/ifindex 2>/dev/null || echo "")"
         if [[ -n "$tap_idx" && -r "/dev/tap${tap_idx}" && -w "/dev/tap${tap_idx}" ]]; then
+            # Sincronizza l'indirizzo MAC con quello effettivo di macvtap0 (se non specificato dall'utente)
+            if [[ "$custom_mac_set" -eq 0 && -r /sys/class/net/macvtap0/address ]]; then
+                local real_tap_mac
+                real_tap_mac="$(cat /sys/class/net/macvtap0/address 2>/dev/null || echo "")"
+                if [[ -n "$real_tap_mac" ]]; then
+                    mac_addr="$real_tap_mac"
+                fi
+            fi
             exec 3<>"/dev/tap${tap_idx}"
             net_desc="Bridge macvtap0 su eth0 (connessione diretta a LAN fisica)"
             net_opts=("-netdev" "tap,id=net0,fd=3"
@@ -237,6 +266,17 @@ main() {
         net_desc="User Mode / NAT (fallback provvisorio)"
     fi
 
+    # Configurazione interfaccia di gestione host SSH (default: 127.0.0.1:10022 -> guest:22)
+    local mgmt_opts=()
+    local mgmt_desc=""
+    if [[ "$enable_ssh_mgmt" -eq 1 ]]; then
+        mgmt_opts=("-netdev" "user,id=net_mgmt,restrict=on,hostfwd=tcp::${ssh_port}-:22"
+                   "-device" "virtio-net-pci,netdev=net_mgmt")
+        mgmt_desc="Inoltro SSH locale attivo (ssh -p ${ssh_port} gelma@localhost)"
+    else
+        mgmt_desc="Inoltro SSH locale disabilitato (--no-ssh)"
+    fi
+
     # Configurazione AutoProtect: intervallo 60s, retention 1h, live non-blocking, dir disco, night-prune
     local ap_config="interval=60,retention=1,mode=live,dir=${delta_dir},night-prune=${night_prune}"
 
@@ -245,7 +285,8 @@ main() {
     echo "[AutoProtect] - Disco base:        $base_image"
     echo "[AutoProtect] - Directory delta:   $delta_dir"
     echo "[AutoProtect] - Memoria RAM:       3 GB"
-    echo "[AutoProtect] - Rete:              $net_desc (MAC: $mac_addr)"
+    echo "[AutoProtect] - Rete LAN:          $net_desc (MAC: $mac_addr)"
+    echo "[AutoProtect] - Rete Gestione:     $mgmt_desc"
     echo "[AutoProtect] - Snapshot:          Ogni 60 secondi (live non-blocking)"
     echo "[AutoProtect] - Retention:         1 ora"
     echo "[AutoProtect] - Night-Prune:       $night_prune (pruning differito di notte)"
@@ -279,6 +320,7 @@ main() {
             -m 3G \
             -drive "file=${boot_disk},format=qcow2,if=virtio" \
             "${net_opts[@]}" \
+            "${mgmt_opts[@]}" \
             -autoprotect "$ap_config" \
             -pidfile "$pid_file" \
             "${qemu_extra_args[@]}"
@@ -292,6 +334,7 @@ main() {
         -m 3G \
         -drive "file=${boot_disk},format=qcow2,if=virtio" \
         "${net_opts[@]}" \
+        "${mgmt_opts[@]}" \
         -autoprotect "$ap_config" \
         -pidfile "$pid_file" \
         "${qemu_extra_args[@]}"

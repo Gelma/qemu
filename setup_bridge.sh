@@ -51,6 +51,11 @@ cmd_status() {
     echo "[Macvtap macvtap0]"
     if ip link show macvtap0 >/dev/null 2>&1; then
         ip -br link show macvtap0
+        local tap_mac
+        tap_mac="$(cat /sys/class/net/macvtap0/address 2>/dev/null || echo "")"
+        if [[ -n "$tap_mac" ]]; then
+            echo "MAC Address hardware: $tap_mac"
+        fi
         local tap_idx
         tap_idx="$(cat /sys/class/net/macvtap0/ifindex 2>/dev/null || echo "")"
         if [[ -n "$tap_idx" && -e "/dev/tap${tap_idx}" ]]; then
@@ -64,6 +69,7 @@ cmd_status() {
 cmd_macvtap() {
     require_root
     local iface="${1:-eth0}"
+    local desired_mac="${2:-}"
     local tap_name="macvtap0"
 
     echo "[setup_bridge] Configurazione macvtap su '$iface' in modalità bridge..."
@@ -73,16 +79,30 @@ cmd_macvtap() {
         exit 1
     fi
 
+    local mac_arg=()
+    if [[ -n "$desired_mac" ]]; then
+        mac_arg=("address" "$desired_mac")
+    fi
+
     # Crea interfaccia macvtap se non esiste già
     if ip link show "$tap_name" >/dev/null 2>&1; then
         echo "[setup_bridge] Interfaccia '$tap_name' già esistente."
+        if [[ -n "$desired_mac" ]]; then
+            ip link set "$tap_name" down
+            ip link set "$tap_name" address "$desired_mac"
+            echo "[setup_bridge] Indirizzo MAC impostato su: $desired_mac"
+        fi
     else
-        ip link add link "$iface" name "$tap_name" type macvtap mode bridge
+        ip link add link "$iface" name "$tap_name" "${mac_arg[@]}" type macvtap mode bridge
         echo "[setup_bridge] Interfaccia '$tap_name' creata."
     fi
 
     ip link set "$tap_name" up
     echo "[setup_bridge] Interfaccia '$tap_name' attivata (UP)."
+
+    local current_mac
+    current_mac="$(cat "/sys/class/net/${tap_name}/address" 2>/dev/null || echo "")"
+    echo "[setup_bridge] Indirizzo MAC attivo: $current_mac"
 
     # Configura permessi su /dev/tapX per permettere l'accesso a utenti standard
     local tap_idx
@@ -94,6 +114,7 @@ cmd_macvtap() {
 
     echo "[setup_bridge] Configurazione macvtap completata con successo!"
     echo "  I pacchetti della VM transiteranno direttamente su '$iface' verso il router LAN / DHCP."
+    echo "  (QEMU utilizzerà automaticamente il MAC $current_mac per la scheda virtio)."
 }
 
 cmd_bridge() {

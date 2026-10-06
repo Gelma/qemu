@@ -27,6 +27,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | 2026-10-06 | Tooling & Paths | Vincolo prioritario risoluzione binari QEMU: utilizzo esclusivo del build tree locale (`./build`) o del path `/opt/qemu` (`bin`/`libexec`), escludendo categoricamente i binari di sistema (`/usr/bin`, `/usr/lib`). Creato `qemu_env.sh` e aggiornati tutti gli script di supporto. | Tooling & Paths ✅ |
 | 2026-10-06 | Bugfix | Risolto crash `Assertion !(bs->open_flags & BDRV_O_INACTIVE) failed` su scritture guest post-snapshot: sostituita `qmp_xen_save_devices_state` con funzione dedicata `autoprotect_save_devices_state` (`qemu_save_device_state`) senza inattivare i block device. Aggiornato binario sia in `./build/` sia in `/opt/qemu/bin/`. | Bugfix ✅ |
 | 2026-10-06 | Boot Guarantee | Garanzia assoluta di boot dall'ultimo snapshot/scrittura: creato risolutore `autoprotect_find_leaf.py` che ispeziona la catena qcow2 e individua la foglia attiva (overlay più recente). Aggiornato `autoprotect_start.sh` per avviare di default dalla foglia preservando il 100% dei dati scritti dal guest, con opzioni `--base`, `--snapshot <tag>` e `--dry-run`. Aggiornato `autoprotect_restore.sh` con marker `[ATTIVO]`. | Boot Guarantee ✅ |
+| 2026-10-06 | Network & SSH | Risolta connettività di rete bridge macvtap su eth0 e accesso SSH guest: sincronizzato MAC address della scheda virtio con quello effettivo di macvtap0 (evitando lo scarto del kernel dei pacchetti di risposta DHCP/LAN); aggiunta scheda di rete di gestione locale con port forwarding SSH su porta 10022 (`ssh -p 10022 gelma@localhost`) con `restrict=on` per evitare conflitti di gateway predefinito. Verificata connettività LAN (IP 172.16.5.142/23), ping gateway e risoluzione DNS da dentro la VM. | Network & SSH ✅ |
 
 ---
 
@@ -566,6 +567,26 @@ Base (Win10.qcow2)
   - Flag `--dry-run`: mostra il comando QEMU e i parametri senza avviare il processo.
 - **`autoprotect_restore.sh`**:
   - Rileva la foglia attiva tramite `autoprotect_find_leaf.py` e la evidenzia chiaramente con il marker `[ATTIVO]` nella tabella degli snapshot disponibili.
+
+---
+
+### Connettività Bridge LAN e Rete di Gestione Host SSH ✅
+
+#### 1. Causa della Connessione "Giù" su Macvtap e Risoluzione MAC Mismatch
+- **Problema identificato:** Quando `setup_bridge.sh` crea l'interfaccia `macvtap0` su `eth0`, il kernel Linux le assegna un indirizzo MAC hardware (es. `fe:7e:97:7f:d6:ed`). Se QEMU avvia la scheda `virtio-net-pci` con un MAC diverso (es. il predefinito `52:54:00:12:34:56`), il driver kernel macvlan/macvtap applica un filtro hardware Layer 2 e scarta silenziosamente tutti i pacchetti unicast in arrivo (comprese le risposte DHCP Offer/Ack del router fisico). Di conseguenza la scheda nel guest non ottiene l'indirizzo IP e rimane nello stato down / no carrier.
+- **Risoluzione:** `autoprotect_start.sh` e `autoprotect_restore.sh` leggono dinamicamente l'indirizzo MAC effettivo da `/sys/class/net/macvtap0/address` e lo assegnano alla scheda `virtio-net-pci` di QEMU. Il router fisico vede il MAC corretto, rilascia la lease DHCP (es. `172.16.5.142/23`) e la connettività LAN/Internet è pienamente operativa.
+
+#### 2. Isolamento Host-to-Guest di Macvtap e Soluzione SSH Management
+- **Architettura Macvtap:** Per design di sicurezza del kernel Linux, il sistema host non può comunicare direttamente con le proprie interfacce macvlan/macvtap residenti sulla stessa scheda fisica (`eth0`). Pertanto l'host non può raggiungere direttamente l'IP LAN del guest o eseguire port forwarding sulla scheda macvtap.
+- **Scheda di Gestione Integrata (`net_mgmt`):** Per consentire l'accesso SSH istantaneo dall'host (`ssh -p 10022 gelma@localhost`), `autoprotect_start.sh` include automaticamente una seconda interfaccia virtio:
+  ```bash
+  -netdev user,id=net_mgmt,restrict=on,hostfwd=tcp::10022-:22 -device virtio-net-pci,netdev=net_mgmt
+  ```
+  - `hostfwd=tcp::10022-:22`: mappa la porta 10022 di `127.0.0.1` sulla porta 22 (SSH) della VM;
+  - `restrict=on`: isola la scheda utente dal traffico internet esterno, garantendo che tutto il traffico LAN/Internet della VM continui a fluire prioritariamente attraverso il bridge fisico `eth0` (default route su gateway `172.16.4.1`).
+- Opzioni disponibili:
+  - `--ssh [porta]`: personalizza la porta (default: 10022);
+  - `--no-ssh`: disabilita la scheda di gestione se non necessaria.
 
 ---
 
