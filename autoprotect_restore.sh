@@ -103,6 +103,13 @@ collect_snapshots() {
     SNAPSHOT_DISKS=()
     SNAPSHOT_RAMS=()
 
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local active_leaf=""
+    if [[ -x "${script_dir}/autoprotect_find_leaf.py" ]]; then
+        active_leaf="$("${script_dir}/autoprotect_find_leaf.py" "$disk_image" --qemu-img "$qemu_img" 2>/dev/null || echo "")"
+    fi
+
     # 1. Trova snapshot delta live nella directory del disco base
     local overlay_file
     for overlay_file in "${disk_dir}"/*-disk-*.qcow2; do
@@ -149,8 +156,13 @@ collect_snapshots() {
         local mod_date
         mod_date="$(date -r "$overlay_file" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "Sconosciuta")"
 
+        local snap_type="Live Delta"
+        if [[ -n "$active_leaf" && "$overlay_file" == "$active_leaf" ]]; then
+            snap_type="Live Delta [ATTIVO]"
+        fi
+
         SNAPSHOT_TAGS+=("$tag")
-        SNAPSHOT_TYPES+=("Live Delta")
+        SNAPSHOT_TYPES+=("$snap_type")
         SNAPSHOT_DATES+=("$mod_date")
         SNAPSHOT_DISKS+=("$overlay_file")
         SNAPSHOT_RAMS+=("$ram_size")

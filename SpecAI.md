@@ -26,6 +26,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | 2026-10-06 | Fase 6 | Eliminazione blocco VM guest durante snapshot: salvataggio delta storage + RAM nella directory del disco base via COW (`fork()` asincrono con `MADV_DOFORK`), scheduling cancellazione notturna (`night-prune` 23:00-06:00), script di supporto ripristino ed elenco snapshot (`autoprotect_restore.sh`), configurazione bridge/macvtap su `eth0` (`setup_bridge.sh` e `autoprotect_start.sh`). | Fase 6 ✅ |
 | 2026-10-06 | Tooling & Paths | Vincolo prioritario risoluzione binari QEMU: utilizzo esclusivo del build tree locale (`./build`) o del path `/opt/qemu` (`bin`/`libexec`), escludendo categoricamente i binari di sistema (`/usr/bin`, `/usr/lib`). Creato `qemu_env.sh` e aggiornati tutti gli script di supporto. | Tooling & Paths ✅ |
 | 2026-10-06 | Bugfix | Risolto crash `Assertion !(bs->open_flags & BDRV_O_INACTIVE) failed` su scritture guest post-snapshot: sostituita `qmp_xen_save_devices_state` con funzione dedicata `autoprotect_save_devices_state` (`qemu_save_device_state`) senza inattivare i block device. Aggiornato binario sia in `./build/` sia in `/opt/qemu/bin/`. | Bugfix ✅ |
+| 2026-10-06 | Boot Guarantee | Garanzia assoluta di boot dall'ultimo snapshot/scrittura: creato risolutore `autoprotect_find_leaf.py` che ispeziona la catena qcow2 e individua la foglia attiva (overlay più recente). Aggiornato `autoprotect_start.sh` per avviare di default dalla foglia preservando il 100% dei dati scritti dal guest, con opzioni `--base`, `--snapshot <tag>` e `--dry-run`. Aggiornato `autoprotect_restore.sh` con marker `[ATTIVO]`. | Boot Guarantee ✅ |
 
 ---
 
@@ -529,6 +530,42 @@ Per garantire che vengano impiegate esclusivamente le versioni compilate nel wor
   - `autoprotect_restore.sh`: `get_qemu_bin()`, `get_qemu_img()`, `get_bridge_helper()`.
   - `setup_bridge.sh`: target SUID configurati su `build/qemu-bridge-helper` e `/opt/qemu/libexec/qemu-bridge-helper`.
   - `qemu_env.sh`: script sourceable (`source qemu_env.sh`) che esporta `PATH` prioritizzando `./build` e `/opt/qemu/bin`.
+
+---
+
+### Garanzia di Boot dall'Ultimo Snapshot / Scrittura ✅
+
+#### Il Principio di Funzionamento della Catena Qcow2
+Durante l'esecuzione con AutoProtect (`mode=live`), ogni minuto viene creato un nuovo file overlay delta:
+```
+Base (Win10.qcow2)
+       ▲
+       └── autoprotect-01-disk.qcow2 (backing: Win10.qcow2)
+                 ▲
+                 └── autoprotect-02-disk.qcow2 (backing: autoprotect-01-disk.qcow2)
+                           ▲
+                           └── autoprotect-N-disk.qcow2 [FOGLIA ATTIVA / SCRITTURE IN CORSO]
+```
+1. Tutte le scritture eseguite dal guest (NTFS, registro, file creati) vengono scritte esclusivamente nella **foglia attiva** (`autoprotect-N`).
+2. I file sottostanti della catena diventano `backing file` in sola lettura.
+3. Se al riavvio venisse passato a QEMU il file base `Win10.qcow2`, la VM partirebbe dallo stato storico iniziale, perdendo la visibilità delle modifiche.
+4. Se al riavvio viene invece passato il file della **foglia attiva** (`autoprotect-N`), QEMU legge i cluster risalendo l'intera catena di backing: **il guest vede il 100% delle modifiche fino all'ultimo secondo prima dello shutdown!**
+5. Al primo snapshot del nuovo avvio, AutoProtect crea un nuovo overlay `autoprotect-N+1` con backing impostato su `autoprotect-N`, proseguendo la catena in modo continuo e naturale.
+
+#### Componenti Implementati:
+- **`autoprotect_find_leaf.py`**:
+  - Scansiona la directory del disco target;
+  - Tramite `qemu-img info --output=json` analizza i collegamenti `backing-filename`;
+  - Ricostruisce il DAG e individua la foglia attiva (overlay non referenziato come backing da nessun altro file, con `mtime` più recente);
+  - Supporta output JSON completo (`--json`), forzatura base (`--base`) e selezione snapshot specifico (`--snapshot <tag>`).
+- **`autoprotect_start.sh`**:
+  - Di default risolve la foglia attiva e avvia QEMU con `-drive file=${boot_disk},format=qcow2,if=virtio`;
+  - Fornisce output diagnostico che certifica all'utente l'avvio dall'ultimo stato/scrittura con il conteggio degli snapshot nella catena;
+  - Flag `--base`: forza il boot dal file base ignorando gli snapshot delta;
+  - Flag `--snapshot <tag>`: avvia da uno snapshot intermedio specificato;
+  - Flag `--dry-run`: mostra il comando QEMU e i parametri senza avviare il processo.
+- **`autoprotect_restore.sh`**:
+  - Rileva la foglia attiva tramite `autoprotect_find_leaf.py` e la evidenzia chiaramente con il marker `[ATTIVO]` nella tabella degli snapshot disponibili.
 
 ---
 

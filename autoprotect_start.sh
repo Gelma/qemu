@@ -20,15 +20,23 @@ usage() {
     echo "  <file.qcow2>          Percorso del file immagine disco in formato qcow2 (obbligatorio)"
     echo ""
     echo "Opzioni:"
+    echo "  --base                Forza l'avvio dal disco base originale (ignora la catena di delta snapshot)"
+    echo "  --snapshot <tag>      Avvia da uno snapshot specifico della catena delta"
     echo "  --night-prune         Abilita la cancellazione massiva differita solo di notte (23:00 - 06:00)"
     echo "  --bridge <iface>      Specifica l'interfaccia bridge da utilizzare (predefinita: macvtap0 su eth0 oppure br0)"
     echo "  --mac <indirizzo_mac> Indirizzo MAC personalizzato per la VM (predefinito: 52:54:00:12:34:56)"
+    echo "  --dry-run             Mostra la configurazione e il comando generato senza avviare la VM"
     echo "  [opzioni_qemu...]     Ulteriori argomenti passati direttamente a QEMU"
+    echo ""
+    echo "Comportamento predefinito:"
+    echo "  All'avvio, rileva automaticamente l'ultimo overlay (foglia attiva) della catena"
+    echo "  e garantisce il boot dallo stato esatto dell'ultimo snapshot/scrittura!"
     echo ""
     echo "Esempi:"
     echo "  $script_name mydisk.qcow2"
     echo "  $script_name mydisk.qcow2 --night-prune"
-    echo "  $script_name mydisk.qcow2 -nographic"
+    echo "  $script_name mydisk.qcow2 --base"
+    echo "  $script_name mydisk.qcow2 --snapshot autoprotect-20261006-143338"
     exit 1
 }
 
@@ -49,12 +57,31 @@ main() {
     local night_prune="off"
     local custom_bridge=""
     local mac_addr="52:54:00:12:34:56"
+    local force_base=0
+    local target_snapshot=""
+    local dry_run=0
     local qemu_extra_args=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --night-prune)
                 night_prune="on"
+                shift
+                ;;
+            --base)
+                force_base=1
+                shift
+                ;;
+            --snapshot)
+                if [[ $# -lt 2 ]]; then
+                    echo "Errore: specificare il tag dello snapshot dopo --snapshot." >&2
+                    exit 1
+                fi
+                target_snapshot="$2"
+                shift 2
+                ;;
+            --dry-run)
+                dry_run=1
                 shift
                 ;;
             --bridge)
@@ -98,6 +125,14 @@ main() {
         exit 1
     fi
 
+    # Determina il binario qemu-img
+    local qemu_img="qemu-img"
+    if [[ -x "${script_dir}/build/qemu-img" ]]; then
+        qemu_img="${script_dir}/build/qemu-img"
+    elif [[ -x "/opt/qemu/bin/qemu-img" ]]; then
+        qemu_img="/opt/qemu/bin/qemu-img"
+    fi
+
     # Determina il percorso del bridge helper (tree locale oppure /opt/qemu/libexec)
     local bridge_helper=""
     if [[ -x "${script_dir}/build/qemu-bridge-helper" ]]; then
@@ -120,6 +155,36 @@ main() {
     disk_abs="$(cd "$(dirname "$disk_image")" && pwd)/$(basename "$disk_image")"
     local delta_dir
     delta_dir="$(dirname "$disk_abs")"
+
+    # Risoluzione automatica della foglia attiva della catena di snapshot delta
+    local find_leaf_cmd=("python3" "${script_dir}/autoprotect_find_leaf.py" "$disk_abs" "--json" "--qemu-img" "$qemu_img")
+    if [[ "$force_base" -eq 1 ]]; then
+        find_leaf_cmd+=("--base")
+    elif [[ -n "$target_snapshot" ]]; then
+        find_leaf_cmd+=("--snapshot" "$target_snapshot")
+    fi
+
+    local leaf_json
+    if ! leaf_json="$("${find_leaf_cmd[@]}")"; then
+        echo "Errore nella risoluzione della catena di snapshot delta tramite autoprotect_find_leaf.py." >&2
+        exit 1
+    fi
+
+    local boot_disk
+    local active_leaf
+    local base_image
+    local chain_depth
+    local matching_count
+
+    boot_disk="$(python3 -c "import json, sys; d = json.loads(sys.argv[1]); print(d.get('selected_boot_disk', ''))" "$leaf_json")"
+    active_leaf="$(python3 -c "import json, sys; d = json.loads(sys.argv[1]); print(d.get('active_leaf', ''))" "$leaf_json")"
+    base_image="$(python3 -c "import json, sys; d = json.loads(sys.argv[1]); print(d.get('base_image', ''))" "$leaf_json")"
+    chain_depth="$(python3 -c "import json, sys; d = json.loads(sys.argv[1]); print(d.get('chain_depth', 0))" "$leaf_json")"
+    matching_count="$(python3 -c "import json, sys; d = json.loads(sys.argv[1]); print(d.get('matching_overlays_count', 0))" "$leaf_json")"
+
+    if [[ -z "$boot_disk" || ! -f "$boot_disk" ]]; then
+        boot_disk="$disk_abs"
+    fi
 
     # Selezione acceleratore (KVM se disponibile, altrimenti fallback su TCG)
     local accel_opts=()
@@ -176,20 +241,56 @@ main() {
     local ap_config="interval=60,retention=1,mode=live,dir=${delta_dir},night-prune=${night_prune}"
 
     echo "[AutoProtect] Avvio macchina virtuale..."
-    echo "[AutoProtect] - Binario QEMU:   $qemu_bin"
-    echo "[AutoProtect] - Disco base:     $disk_abs"
-    echo "[AutoProtect] - Directory delta: $delta_dir"
-    echo "[AutoProtect] - Memoria RAM:    3 GB"
-    echo "[AutoProtect] - Rete:           $net_desc (MAC: $mac_addr)"
-    echo "[AutoProtect] - Snapshot:       Ogni 60 secondi (live non-blocking)"
-    echo "[AutoProtect] - Retention:      1 ora"
-    echo "[AutoProtect] - Night-Prune:    $night_prune (pruning differito di notte)"
+    echo "[AutoProtect] - Binario QEMU:      $qemu_bin"
+    echo "[AutoProtect] - Disco base:        $base_image"
+    echo "[AutoProtect] - Directory delta:   $delta_dir"
+    echo "[AutoProtect] - Memoria RAM:       3 GB"
+    echo "[AutoProtect] - Rete:              $net_desc (MAC: $mac_addr)"
+    echo "[AutoProtect] - Snapshot:          Ogni 60 secondi (live non-blocking)"
+    echo "[AutoProtect] - Retention:         1 ora"
+    echo "[AutoProtect] - Night-Prune:       $night_prune (pruning differito di notte)"
     echo ""
+
+    if [[ "$force_base" -eq 1 ]]; then
+        echo "[AutoProtect - BOOT] MODALITA' DISCO BASE (--base):"
+        echo "  Disco di boot:   $boot_disk"
+        echo "  ATTENZIONE: Avvio dal disco originale base; gli snapshot delta esistenti ($matching_count) non saranno applicati."
+    elif [[ -n "$target_snapshot" ]]; then
+        echo "[AutoProtect - BOOT] MODALITA' SNAPSHOT SPECIFICO (--snapshot):"
+        echo "  Tag snapshot:    $target_snapshot"
+        echo "  Disco di boot:   $boot_disk"
+    elif [[ "$matching_count" -gt 0 ]]; then
+        echo "[AutoProtect - BOOT] GARANZIA ULTIMO STATO / SCRITTURA ATTIVA:"
+        echo "  Rilevata catena delta attiva ($matching_count snapshot trovati, profondita': $chain_depth)."
+        echo "  Foglia attiva:   $(basename "$active_leaf")"
+        echo "  Disco di boot:   $boot_disk"
+        echo "  -> La VM riparte al 100% dall'ultimo stato/scrittura eseguita prima dello spegnimento/riavvio!"
+        echo "  (Usa '--base' per avviare dal disco base pulito o '--snapshot <tag>' per un punto temporale specifico)."
+    else
+        echo "[AutoProtect - BOOT] NUOVA SESSIONE DISCO BASE:"
+        echo "  Nessun delta snapshot esistente nella directory. Avvio da: $boot_disk"
+    fi
+    echo ""
+
+    if [[ "$dry_run" -eq 1 ]]; then
+        echo "[AutoProtect - DRY RUN] Comando QEMU che verrebbe eseguito:"
+        echo "$qemu_bin" \
+            "${accel_opts[@]}" \
+            -m 3G \
+            -drive "file=${boot_disk},format=qcow2,if=virtio" \
+            "${net_opts[@]}" \
+            -autoprotect "$ap_config" \
+            -pidfile "$pid_file" \
+            "${qemu_extra_args[@]}"
+        echo ""
+        echo "[AutoProtect - DRY RUN] Esecuzione simulata completata con successo."
+        exit 0
+    fi
 
     exec "$qemu_bin" \
         "${accel_opts[@]}" \
         -m 3G \
-        -drive "file=${disk_abs},format=qcow2,if=virtio" \
+        -drive "file=${boot_disk},format=qcow2,if=virtio" \
         "${net_opts[@]}" \
         -autoprotect "$ap_config" \
         -pidfile "$pid_file" \
