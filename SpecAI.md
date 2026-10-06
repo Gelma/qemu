@@ -745,6 +745,81 @@ Consolida permanentemente tutte le modifiche e scritture accumulate negli snapsh
 ./autoprotect_restore.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --consolidate
 ```
 
+##### Esempio di Output a Terminale (Dry-Run):
+```text
+==========================================================================
+           CONSOLIDAMENTO SNAPSHOT AUTOPROTECT NEL DISCO BASE
+==========================================================================
+Disco base di destinazione:  /mnt/bidone-sda8/super_protezione/disk0.qcow2
+Foglia attiva (ultimi dati): autoprotect-20261006-171714-disk-virtio0.qcow2
+Numero di snapshot nella catena: 32 (profondità: 32)
+
+Dettaglio file da eliminare dopo il commit:
+  - File delta qcow2:        32 file (111.06 MB)
+  - File di stato RAM/dev:   64 file (96.53 GB)
+Spazio disco stimato liberabile: 96.64 GB
+==========================================================================
+
+[DRY RUN] Comando che verrebbe eseguito per il commit:
+  /opt/qemu/bin/qemu-img commit -b "/mnt/bidone-sda8/super_protezione/disk0.qcow2" -p "/mnt/bidone-sda8/super_protezione/autoprotect-20261006-171714-disk-virtio0.qcow2"
+
+[DRY RUN] File che verrebbero rimossi:
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261006-164531-disk-virtio0.qcow2
+  ... (32 file delta qcow2)
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261006-164531-ram.state
+  ... (64 file di stato)
+
+[DRY RUN] Simulazione completata. Nessuna modifica apportata ai file.
+```
+
+##### Esempio di Output a Terminale (Consolidamento Effettivo):
+```text
+==========================================================================
+           CONSOLIDAMENTO SNAPSHOT AUTOPROTECT NEL DISCO BASE
+==========================================================================
+Disco base di destinazione:  /mnt/bidone-sda8/super_protezione/disk0.qcow2
+Foglia attiva (ultimi dati): autoprotect-20261006-171714-disk-virtio0.qcow2
+Numero di snapshot nella catena: 32 (profondità: 32)
+
+Dettaglio file da eliminare dopo il commit:
+  - File delta qcow2:        32 file (111.06 MB)
+  - File di stato RAM/dev:   64 file (96.53 GB)
+Spazio disco stimato liberabile: 96.64 GB
+==========================================================================
+
+ATTENZIONE: Questa operazione scriverà permanentemente tutte le modifiche
+della catena nel file '/mnt/bidone-sda8/super_protezione/disk0.qcow2' e cancellerà tutti gli snapshot intermedi.
+Procedere con il consolidamento? [s/N]: s
+
+[1/3] Consolidamento scritture in corso con qemu-img commit...
+Image committed.
+[2/3] Rimozione file delta qcow2 (32 file)...
+[3/3] Rimozione file di stato RAM/dispositivi (64 file)...
+
+==========================================================================
+CONSOLIDAMENTO COMPLETATO CON SUCCESSO!
+- Tutte le scritture fino all'ultimo stato sono ora salvate in:
+  /mnt/bidone-sda8/super_protezione/disk0.qcow2
+- Gli snapshot delta sono stati rimossi e lo spazio su disco è stato liberato.
+- Il file base può ora essere riavviato normalmente come disco unico.
+==========================================================================
+```
+
+##### Workflow Operativo Tipico:
+```bash
+# Passo 1: Spegnere la VM (obbligatorio prima del consolidamento per evitare scritture concorrenti)
+./autoprotect_stop.sh
+
+# Passo 2: Verificare in sicurezza i file e lo spazio disco stimato da recuperare
+./autoprotect_consolidate.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --dry-run
+
+# Passo 3: Eseguire il consolidamento delle scritture ed eliminare gli snapshot
+./autoprotect_consolidate.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2
+
+# Passo 4: Riavviare la VM dal disco base consolidato (ripartirà un nuovo ciclo di autoprotect pulito)
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2
+```
+
 ---
 
 ## Riepilogo Progressione
