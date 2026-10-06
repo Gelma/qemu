@@ -24,6 +24,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | 2026-10-01 | Fase 3 | Implementata logica interna completa in `migration/autoprotect.c`: gestione `AutoProtectState`, timer `QEMUTimer` su `QEMU_CLOCK_REALTIME`, callback di snapshot periodico via `save_snapshot`, pruning automatico via `delete_snapshot` con salvaguardia snapshot manuali, comandi HMP `autoprotect` e `info autoprotect`. Test di funzionamento live su VM reale superati. | Fase 3 ✅ |
 | 2026-10-01 | Tooling | Creato e aggiornato script `configure_max.sh` che lancia `./configure --prefix="/opt/qemu"` abilitando 116 feature opzionali supportate e compilabili sul laptop (aggiunte 9 nuove opzioni a seguito dell'installazione delle relative librerie di sviluppo: `af-xdp`, `capstone`, `libcbor`, `libdaxctl`, `lzfse`, `sdl-image`, `sparse`, `vde`, `vfio-user-server`). | Tooling ✅ |
 | 2026-10-06 | Fase 6 | Eliminazione blocco VM guest durante snapshot: salvataggio delta storage + RAM nella directory del disco base via COW (`fork()` asincrono con `MADV_DOFORK`), scheduling cancellazione notturna (`night-prune` 23:00-06:00), script di supporto ripristino ed elenco snapshot (`autoprotect_restore.sh`), configurazione bridge/macvtap su `eth0` (`setup_bridge.sh` e `autoprotect_start.sh`). | Fase 6 ✅ |
+| 2026-10-06 | Tooling & Paths | Vincolo prioritario risoluzione binari QEMU: utilizzo esclusivo del build tree locale (`./build`) o del path `/opt/qemu` (`bin`/`libexec`), escludendo categoricamente i binari di sistema (`/usr/bin`, `/usr/lib`). Creato `qemu_env.sh` e aggiornati tutti gli script di supporto. | Tooling & Paths ✅ |
 
 ---
 
@@ -513,6 +514,20 @@ produce un deliverable funzionante e testabile indipendentemente.
 - [x] Creato script helper `setup_bridge.sh` per configurare rapidamente `macvtap0` su `eth0` in modalità bridge (o Linux bridge `br0`) con permessi appropriati per utente non-root.
 - [x] Aggiornato `autoprotect_start.sh` con supporto a rete bridged (`macvtap0` su `eth0` o bridge Linux `br0`), MAC address personalizzato o persistente, supporto `--night-prune` e fallback trasparente a user mode se il bridge non è ancora presente.
 - [x] La VM ottiene un indirizzo IP indipendente direttamente dal server DHCP della rete LAN fisica.
+
+---
+
+### Vincolo Risoluzione Binari e Tool QEMU ✅
+Per garantire che vengano impiegate esclusivamente le versioni compilate nel workspace o installate in `/opt/qemu` (e mai le versioni di sistema `/usr/bin/qemu*` o `/usr/lib/qemu/*`), tutti gli script adottano la seguente catena di risoluzione:
+1. **Tree Locale Compilato**: cerca i binari in `./build/` (es. `./build/qemu-system-x86_64`, `./build/qemu-img`, `./build/qemu-bridge-helper`);
+2. **Installazione locale `/opt/qemu`**: se non presenti nel tree di build, cerca in `/opt/qemu/bin/` e `/opt/qemu/libexec/`;
+3. **Nessun fallback su `/usr/`**: se il binario non è presente in nessuna delle due sedi, lo script termina con errore esplicito e indicazioni di compilazione.
+
+- Script aggiornati con la logica di fallback locale -> `/opt/qemu`:
+  - `autoprotect_start.sh`: binario QEMU (`build/qemu-system-x86_64` o `/opt/qemu/bin/qemu-system-x86_64`) e helper bridge (`build/qemu-bridge-helper` o `/opt/qemu/libexec/qemu-bridge-helper`).
+  - `autoprotect_restore.sh`: `get_qemu_bin()`, `get_qemu_img()`, `get_bridge_helper()`.
+  - `setup_bridge.sh`: target SUID configurati su `build/qemu-bridge-helper` e `/opt/qemu/libexec/qemu-bridge-helper`.
+  - `qemu_env.sh`: script sourceable (`source qemu_env.sh`) che esporta `PATH` prioritizzando `./build` e `/opt/qemu/bin`.
 
 ---
 

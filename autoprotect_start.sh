@@ -33,8 +33,7 @@ usage() {
 }
 
 main() {
-    if [[ $# -lt 1 ]]; then
-        echo "Errore: specificare il file qcow2 come primo argomento." >&2
+    if [[ $# -lt 1 ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
         usage
     fi
 
@@ -84,16 +83,34 @@ main() {
         esac
     done
 
-    # Determina il percorso del binario QEMU compilato localmente (mai quello di sistema)
+    # Determina il percorso del binario QEMU (compilato in questo tree oppure in /opt/qemu)
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local qemu_bin="${script_dir}/build/qemu-system-x86_64"
+    local qemu_bin=""
 
-    if [[ ! -x "$qemu_bin" ]]; then
-        echo "Errore: binario QEMU compilato localmente non trovato o non eseguibile in:" >&2
-        echo "  $qemu_bin" >&2
-        echo "Compilare il progetto prima di avviare la VM (es. con 'ninja -C build qemu-system-x86_64' o 'make')." >&2
+    if [[ -x "${script_dir}/build/qemu-system-x86_64" ]]; then
+        qemu_bin="${script_dir}/build/qemu-system-x86_64"
+    elif [[ -x "/opt/qemu/bin/qemu-system-x86_64" ]]; then
+        qemu_bin="/opt/qemu/bin/qemu-system-x86_64"
+    else
+        echo "Errore: binario 'qemu-system-x86_64' non trovato né nel build tree locale (${script_dir}/build) né in /opt/qemu/bin." >&2
+        echo "Compilare il progetto prima di avviare la VM (es. con 'ninja -C build qemu-system-x86_64') o installarlo in /opt/qemu." >&2
         exit 1
+    fi
+
+    # Determina il percorso del bridge helper (tree locale oppure /opt/qemu/libexec)
+    local bridge_helper=""
+    if [[ -x "${script_dir}/build/qemu-bridge-helper" ]]; then
+        bridge_helper="${script_dir}/build/qemu-bridge-helper"
+    elif [[ -x "${script_dir}/build/qemu-bundle/opt/qemu/libexec/qemu-bridge-helper" ]]; then
+        bridge_helper="${script_dir}/build/qemu-bundle/opt/qemu/libexec/qemu-bridge-helper"
+    elif [[ -x "/opt/qemu/libexec/qemu-bridge-helper" ]]; then
+        bridge_helper="/opt/qemu/libexec/qemu-bridge-helper"
+    fi
+
+    local helper_opt=""
+    if [[ -n "$bridge_helper" ]]; then
+        helper_opt=",helper=${bridge_helper}"
     fi
 
     local pid_file="/tmp/qemu_autoprotect.pid"
@@ -120,7 +137,7 @@ main() {
 
     if [[ -n "$custom_bridge" ]]; then
         net_desc="Bridge personalizzato: $custom_bridge"
-        net_opts=("-netdev" "bridge,id=net0,br=${custom_bridge},helper=/usr/lib/qemu/qemu-bridge-helper"
+        net_opts=("-netdev" "bridge,id=net0,br=${custom_bridge}${helper_opt}"
                   "-device" "virtio-net-pci,netdev=net0,mac=${mac_addr}")
     elif ip link show macvtap0 >/dev/null 2>&1; then
         local tap_idx
@@ -138,7 +155,7 @@ main() {
     # Se macvtap non è pronto, controlla bridge br0
     if [[ ${#net_opts[@]} -eq 0 ]] && ip link show br0 >/dev/null 2>&1; then
         net_desc="Bridge Linux br0 su eth0"
-        net_opts=("-netdev" "bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper"
+        net_opts=("-netdev" "bridge,id=net0,br=br0${helper_opt}"
                   "-device" "virtio-net-pci,netdev=net0,mac=${mac_addr}")
     fi
 

@@ -38,6 +38,53 @@ format_size() {
     fi
 }
 
+# Risolve il binario QEMU (compilato localmente in build oppure in /opt/qemu)
+get_qemu_bin() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -x "${script_dir}/build/qemu-system-x86_64" ]]; then
+        echo "${script_dir}/build/qemu-system-x86_64"
+        return 0
+    elif [[ -x "/opt/qemu/bin/qemu-system-x86_64" ]]; then
+        echo "/opt/qemu/bin/qemu-system-x86_64"
+        return 0
+    fi
+    echo "Errore: 'qemu-system-x86_64' non trovato né in ${script_dir}/build né in /opt/qemu/bin." >&2
+    exit 1
+}
+
+# Risolve qemu-img (compilato localmente in build oppure in /opt/qemu)
+get_qemu_img() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -x "${script_dir}/build/qemu-img" ]]; then
+        echo "${script_dir}/build/qemu-img"
+        return 0
+    elif [[ -x "/opt/qemu/bin/qemu-img" ]]; then
+        echo "/opt/qemu/bin/qemu-img"
+        return 0
+    fi
+    echo "Errore: 'qemu-img' non trovato né in ${script_dir}/build né in /opt/qemu/bin." >&2
+    exit 1
+}
+
+# Risolve qemu-bridge-helper (tree locale oppure /opt/qemu/libexec)
+get_bridge_helper() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -x "${script_dir}/build/qemu-bridge-helper" ]]; then
+        echo "${script_dir}/build/qemu-bridge-helper"
+        return 0
+    elif [[ -x "${script_dir}/build/qemu-bundle/opt/qemu/libexec/qemu-bridge-helper" ]]; then
+        echo "${script_dir}/build/qemu-bundle/opt/qemu/libexec/qemu-bridge-helper"
+        return 0
+    elif [[ -x "/opt/qemu/libexec/qemu-bridge-helper" ]]; then
+        echo "/opt/qemu/libexec/qemu-bridge-helper"
+        return 0
+    fi
+    return 1
+}
+
 # Raccoglie gli snapshot disponibili
 collect_snapshots() {
     local disk_image="$1"
@@ -46,12 +93,8 @@ collect_snapshots() {
     local base_name
     base_name="$(basename "$disk_image")"
 
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local qemu_img="${script_dir}/build/qemu-img"
-    if [[ ! -x "$qemu_img" ]]; then
-        qemu_img="qemu-img"
-    fi
+    local qemu_img
+    qemu_img="$(get_qemu_img)"
 
     # Snapshot list arrays
     SNAPSHOT_TAGS=()
@@ -168,9 +211,8 @@ start_vm_live_delta() {
     local overlay_path="$2"
     local tag="$3"
 
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local qemu_bin="${script_dir}/build/qemu-system-x86_64"
+    local qemu_bin
+    qemu_bin="$(get_qemu_bin)"
 
     echo ""
     echo "[Ripristino] Avvio VM dallo snapshot live delta: $tag"
@@ -187,7 +229,8 @@ start_vm_live_delta() {
     local run_disk="$overlay_path"
 
     if [[ "$choice" =~ ^[Ss]?$ ]]; then
-        local qemu_img="${script_dir}/build/qemu-img"
+        local qemu_img
+        qemu_img="$(get_qemu_img)"
         "$qemu_img" create -f qcow2 -b "$overlay_path" -F qcow2 "$session_overlay" >/dev/null
         run_disk="$session_overlay"
         echo "[Ripristino] Overlay temporaneo creato in: $run_disk"
@@ -201,6 +244,14 @@ start_vm_live_delta() {
         accel_opts=("-accel" "tcg")
     fi
 
+    # Rilevamento bridge helper
+    local bridge_helper=""
+    if bridge_helper="$(get_bridge_helper 2>/dev/null)"; then
+        bridge_helper=",helper=${bridge_helper}"
+    else
+        bridge_helper=""
+    fi
+
     # Rilevamento rete bridge/macvtap
     local net_opts=()
     if [[ -e /dev/tap$(cat /sys/class/net/macvtap0/ifindex 2>/dev/null || echo "") && -r /dev/tap$(cat /sys/class/net/macvtap0/ifindex 2>/dev/null || echo "") ]]; then
@@ -209,12 +260,12 @@ start_vm_live_delta() {
         exec 3<>"/dev/tap${tap_idx}"
         net_opts=("-netdev" "tap,id=net0,fd=3" "-device" "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56")
     elif ip link show br0 >/dev/null 2>&1; then
-        net_opts=("-netdev" "bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper" "-device" "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56")
+        net_opts=("-netdev" "bridge,id=net0,br=br0${bridge_helper}" "-device" "virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56")
     else
         net_opts=("-netdev" "user,id=net0" "-device" "virtio-net-pci,netdev=net0")
     fi
 
-    echo "[Ripristino] Esecuzione QEMU..."
+    echo "[Ripristino] Esecuzione QEMU: $qemu_bin"
     exec "$qemu_bin" \
         "${accel_opts[@]}" \
         -m 3G \
@@ -226,10 +277,10 @@ start_vm_internal() {
     local disk_image="$1"
     local tag="$2"
 
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local qemu_bin="${script_dir}/build/qemu-system-x86_64"
-    local qemu_img="${script_dir}/build/qemu-img"
+    local qemu_bin
+    qemu_bin="$(get_qemu_bin)"
+    local qemu_img
+    qemu_img="$(get_qemu_img)"
 
     echo ""
     echo "[Ripristino] Snapshot interno selezionato: $tag"

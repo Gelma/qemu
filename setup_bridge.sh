@@ -125,11 +125,20 @@ cmd_bridge() {
         echo "[setup_bridge] Aggiunto 'allow $br_name' a /etc/qemu/bridge.conf."
     fi
 
-    # Configura setuid su qemu-bridge-helper se necessario
-    if [[ -f /usr/lib/qemu/qemu-bridge-helper ]]; then
-        chmod u+s /usr/lib/qemu/qemu-bridge-helper
-        echo "[setup_bridge] Abilitato SUID su /usr/lib/qemu/qemu-bridge-helper."
-    fi
+    # Configura setuid su qemu-bridge-helper (tree locale oppure /opt/qemu/libexec)
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local helper_targets=(
+        "${script_dir}/build/qemu-bridge-helper"
+        "${script_dir}/build/qemu-bundle/opt/qemu/libexec/qemu-bridge-helper"
+        "/opt/qemu/libexec/qemu-bridge-helper"
+    )
+    for h in "${helper_targets[@]}"; do
+        if [[ -f "$h" ]]; then
+            chmod u+s "$h" 2>/dev/null || true
+            echo "[setup_bridge] Abilitato SUID su $h."
+        fi
+    done
 
     echo "[setup_bridge] Bridge Linux '$br_name' configurato con successo!"
 }
