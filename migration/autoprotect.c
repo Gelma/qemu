@@ -39,6 +39,9 @@
 #include "block/block-global-state.h"
 #include "system/ramlist.h"
 #include "system/ramblock.h"
+#include "io/channel-file.h"
+#include "migration/qemu-file.h"
+#include "migration/savevm.h"
 
 #ifdef qemu_ram_foreach_block
 #undef qemu_ram_foreach_block
@@ -360,6 +363,30 @@ static bool autoprotect_save_ram_live_fork(const char *ram_file, const char *dev
     return true;
 }
 
+static bool autoprotect_save_devices_state(const char *filename, Error **errp)
+{
+    QIOChannelFile *ioc = qio_channel_file_new_path(filename,
+                                                    O_WRONLY | O_CREAT | O_TRUNC,
+                                                    0660, errp);
+    if (!ioc) {
+        return false;
+    }
+    qio_channel_set_name(QIO_CHANNEL(ioc), "migration-autoprotect-dev-state");
+    QEMUFile *f = qemu_file_new_output(QIO_CHANNEL(ioc));
+    object_unref(OBJECT(ioc));
+
+    qemu_savevm_send_header(f);
+    int ret = qemu_save_device_state(f, errp);
+    int close_ret = qemu_fclose(f);
+    if (ret < 0 || close_ret < 0) {
+        if (!*errp) {
+            error_setg(errp, "AutoProtect: saving device state failed");
+        }
+        return false;
+    }
+    return true;
+}
+
 static bool autoprotect_take_live_snapshot(AutoProtectState *s, const char *tag)
 {
     const char *dir = s->storage_dir ? s->storage_dir : "/tmp";
@@ -414,14 +441,14 @@ static bool autoprotect_take_live_snapshot(AutoProtectState *s, const char *tag)
     /* 2. Micro-pause (< 3ms) to capture device state while vCPUs are quiescent */
     vm_stop(RUN_STATE_SAVE_VM);
     bdrv_drain_all_begin();
-    qmp_xen_save_devices_state(dev_file, true, true, &err);
+    bool dev_ok = autoprotect_save_devices_state(dev_file, &err);
     bdrv_drain_all_end();
 
     /* 3. Fork asynchronous RAM dump and immediately resume VM */
     bool ram_ok = autoprotect_save_ram_live_fork(ram_file, dev_file);
     vm_start();
 
-    if (err) {
+    if (!dev_ok) {
         error_reportf_err(err, "AutoProtect: device state save failed: ");
         return false;
     }
