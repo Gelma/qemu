@@ -28,6 +28,7 @@ con retention a tempo e impatto minimo sul funzionamento della VM.
 | 2026-10-06 | Bugfix | Risolto crash `Assertion !(bs->open_flags & BDRV_O_INACTIVE) failed` su scritture guest post-snapshot: sostituita `qmp_xen_save_devices_state` con funzione dedicata `autoprotect_save_devices_state` (`qemu_save_device_state`) senza inattivare i block device. Aggiornato binario sia in `./build/` sia in `/opt/qemu/bin/`. | Bugfix ✅ |
 | 2026-10-06 | Boot Guarantee | Garanzia assoluta di boot dall'ultimo snapshot/scrittura: creato risolutore `autoprotect_find_leaf.py` che ispeziona la catena qcow2 e individua la foglia attiva (overlay più recente). Aggiornato `autoprotect_start.sh` per avviare di default dalla foglia preservando il 100% dei dati scritti dal guest, con opzioni `--base`, `--snapshot <tag>` e `--dry-run`. Aggiornato `autoprotect_restore.sh` con marker `[ATTIVO]`. | Boot Guarantee ✅ |
 | 2026-10-06 | Network & SSH | Risolta connettività di rete bridge macvtap su eth0 e accesso SSH guest: sincronizzato MAC address della scheda virtio con quello effettivo di macvtap0 (evitando lo scarto del kernel dei pacchetti di risposta DHCP/LAN); aggiunta scheda di rete di gestione locale con port forwarding SSH su porta 10022 (`ssh -p 10022 gelma@localhost`) con `restrict=on` per evitare conflitti di gateway predefinito. Verificata connettività LAN (IP 172.16.5.142/23), ping gateway e risoluzione DNS da dentro la VM. | Network & SSH ✅ |
+| 2026-10-06 | Documentazione | Inserita sezione completa 'Guida Operativa Rapida ed Esempi di Utilizzo': comandi di configurazione bridge, avvio standard e differito con AutoProtect, selezione/ripristino snapshot, accesso SSH host, avvio da disco base e arresto controllato. | Documentazione ✅ |
 
 ---
 
@@ -587,6 +588,131 @@ Base (Win10.qcow2)
 - Opzioni disponibili:
   - `--ssh [porta]`: personalizza la porta (default: 10022);
   - `--no-ssh`: disabilita la scheda di gestione se non necessaria.
+
+---
+
+### Guida Operativa Rapida ed Esempi di Utilizzo ✅
+
+#### 1. Configurazione Iniziale Rete Bridge (Una Tantum)
+Per collegare la VM direttamente alla LAN fisica su `eth0` come dispositivo autonomo (con proprio IP assegnato via DHCP dal router):
+
+```bash
+# Configura macvtap0 su eth0 e imposta i permessi corretti per utente non-root
+sudo ./setup_bridge.sh macvtap eth0
+
+# Verifica dello stato delle interfacce e del dispositivo /dev/tapX
+./setup_bridge.sh status eth0
+```
+
+---
+
+#### 2. Avvio della Macchina Virtuale con AutoProtect (`autoprotect_start.sh`)
+
+##### A) Avvio Standard (Predefinito con Garanzia Ultimo Stato/Scrittura)
+Avvia la VM con 3GB di RAM, abilitando snapshot live non-blocking ogni 60 secondi con retention di 1 ora:
+```bash
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2
+```
+- **Garanzia automatica:** Rileva in autonomia l'overlay foglia (`autoprotect-N-disk-virtio0.qcow2`) e riparte dall'ultimo secondo in cui la macchina ha scritto;
+- **Rete LAN:** Connessa direttamente al router tramite `macvtap0` su `eth0` con MAC sincronizzato;
+- **Rete Gestione Host:** Porta SSH `127.0.0.1:10022` aperta e pronta all'uso.
+
+##### B) Avvio con Cancellazione Notturna Differita (`--night-prune`)
+Posticipa il pruning (eliminazione file snapshot scaduti oltre l'ora) alla fascia notturna (23:00 - 06:00), per azzerare qualsiasi carico di I/O disco durante il giorno:
+```bash
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --night-prune
+```
+
+##### C) Verifica del Comando senza Avviare la VM (`--dry-run`)
+Mostra a terminale l'ispezione della catena, la foglia rilevata e l'esatto comando QEMU generato:
+```bash
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --dry-run
+```
+
+##### D) Avvio Forzato dal Disco Base Originale (`--base`)
+Se desideri ripartire pulito dal disco base originale ignorando tutti gli snapshot delta accumulati:
+```bash
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --base
+```
+
+##### E) Avvio Diretto da uno Snapshot Storico Specifico (`--snapshot`)
+Per avviare la VM da un punto temporale precedente nella catena di delta:
+```bash
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --snapshot autoprotect-20261006-171013
+```
+
+##### F) Personalizzazione Porta SSH Host o Disabilitazione
+```bash
+# Cambia la porta SSH locale (es. 2222)
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --ssh 2222
+
+# Disabilita l'interfaccia di gestione locale (solo connessione bridged fisica LAN)
+./autoprotect_start.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --no-ssh
+```
+
+---
+
+#### 3. Accesso alla VM Guest dall'Host
+
+##### Accesso tramite SSH (Porta 10022)
+```bash
+# Connessione immediata tramite la porta di gestione locale
+ssh -p 10022 gelma@localhost
+# Password predefinita utente guest: p
+```
+
+##### Accesso Diretto tramite IP Fisico LAN
+La VM ottiene un indirizzo IP indipendente sulla stessa sottorete dell'host (es. `172.16.5.142`):
+```bash
+ssh gelma@172.16.5.142
+```
+
+##### Accesso Grafico (GUI)
+La finestra display QEMU si apre automaticamente sul desktop grafico dell'host (`DISPLAY=:0.0`).
+
+---
+
+#### 4. Gestione, Elenco e Selezione Snapshot (`autoprotect_restore.sh`)
+
+##### A) Visualizzare l'Elenco degli Snapshot Disponibili
+Mostra una tabella riassuntiva con data, ora, dimensione RAM e l'indicatore `[ATTIVO]` sulla foglia corrente:
+```bash
+./autoprotect_restore.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --list
+```
+*Esempio output:*
+```
+==========================================================================================
+NUM  | TAG SNAPSHOT                 | TIPO                | DATA E ORA          | STATO RAM 
+-----+------------------------------+---------------------+---------------------+------------
+1    | autoprotect-20261006-170113  | Live Delta          | 2026-10-06 19:02:11 | 3.02 GB   
+...
+32   | autoprotect-20261006-171714  | Live Delta [ATTIVO] | 2026-10-06 19:17:34 | 3.02 GB   
+==========================================================================================
+```
+
+##### B) Ripristino Interattivo Guidato
+Eseguendo lo script senza parametri opzionali, viene mostrata la lista e richiesto il numero o tag da ripristinare:
+```bash
+./autoprotect_restore.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2
+```
+- Consente di creare un overlay di sicurezza di sessione per non alterare lo snapshot storico durante i test.
+
+##### C) Ripristino Diretto a Riga di Comando
+```bash
+# Per numero progressivo:
+./autoprotect_restore.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --snapshot 15
+
+# Per tag temporale:
+./autoprotect_restore.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --snapshot autoprotect-20261006-171013
+```
+
+---
+
+#### 5. Arresto Pulito della VM (`autoprotect_stop.sh`)
+Arresta la macchina virtuale in modo pulito inviando `SIGTERM` tramite il file PID registrato, eseguendo il flush completo di tutti i buffer disco qcow2:
+```bash
+./autoprotect_stop.sh
+```
 
 ---
 
