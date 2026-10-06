@@ -716,17 +716,48 @@ Arresta la macchina virtuale in modo pulito inviando `SIGTERM` tramite il file P
 
 ---
 
+#### 6. Consolidamento Scritture nel Disco Base ed Eliminazione Snapshot (`autoprotect_consolidate.sh` / `autoprotect_commit.sh`)
+
+Consolida permanentemente tutte le modifiche e scritture accumulate negli snapshot delta (`autoprotect-*-disk-virtio0.qcow2`) all'interno dell'immagine originaria di base (es. `disk0.qcow2`), portando il disco di partenza allo stato identico dell'ultima scrittura e rimuovendo in sicurezza tutti i file overlay e gli stati RAM/dispositivi per liberare spazio su disco.
+
+##### Caratteristiche e Garanzie:
+- **Zero perdite:** Esegue il commit dell'intera catena di delta a ritroso fino al disco base specificato (`qemu-img commit -b <base_image> -p <active_leaf>`);
+- **Sicurezza:** Verifica che la VM QEMU non sia attiva (controllo PID e lock qemu) prima di procedere, impedendo qualsiasi corruzione;
+- **Pulizia completa:** Rimuove tutti i file delta `.qcow2`, dump RAM `.state` e registri device `.state` associati agli snapshot, liberando decine di GB di spazio;
+- **Interscambiabile:** Utilizzabile tramite `./autoprotect_consolidate.sh`, tramite il symlink `./autoprotect_commit.sh`, tramite opzione `./autoprotect_restore.sh --consolidate`, oppure premendo `c` dal menu interattivo di ripristino.
+
+##### Esempi d'Uso:
+
+```bash
+# 1. Simulazione a vuoto (Dry-Run): elenca i file e stima lo spazio liberabile senza toccare nulla
+./autoprotect_consolidate.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --dry-run
+
+# 2. Consolidamento interattivo (chiede conferma esplicita prima di committare ed eliminare)
+./autoprotect_consolidate.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2
+
+# 3. Consolidamento automatico senza prompt (per script o cron notturni)
+./autoprotect_consolidate.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 -y
+
+# 4. Consolidamento mantenendo i file delta di backup (senza cancellarli)
+./autoprotect_consolidate.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --keep-snapshots
+
+# 5. Esecuzione tramite script di ripristino
+./autoprotect_restore.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --consolidate
+```
+
+---
+
 ## Riepilogo Progressione
 
 ```
-FASE 0 ✅   FASE 1 ✅   FASE 2 ✅   FASE 3 ✅   FASE 4 ✅   FASE 5 ✅   FASE 6 ✅
-Analisi     Script      QAPI +      Timer +     Live       Hardening & Live Delta,
-            esterno     Stub C      Snapshot    (non-block) Test, Docs, Night-Prune,
-            QMP                     + Prune                 CLI Option  Restore & Bridge
-            ────────────────────────────────────────────────────────────────────────────►
-            Zero                    Media                  Alta         Non-blocking
-            invasività              invasività             invasività   Zero freeze
-            VM blocca               VM blocca              VM NON blocca VM LAN Bridge
+FASE 0 ✅   FASE 1 ✅   FASE 2 ✅   FASE 3 ✅   FASE 4 ✅   FASE 5 ✅   FASE 6 ✅   FASE 7 ✅
+Analisi     Script      QAPI +      Timer +     Live       Hardening & Live Delta, Consolidamento
+            esterno     Stub C      Snapshot    (non-block) Test, Docs, Night-Prune, & Commit Disco
+            QMP                     + Prune                 CLI Option  Restore & Bridge (Zero Snapshot)
+            ────────────────────────────────────────────────────────────────────────────────────────►
+            Zero                    Media                  Alta         Non-blocking Libera Spazio
+            invasività              invasività             invasività   Zero freeze  100% all'ultimo
+            VM blocca               VM blocca              VM NON blocca VM LAN Bridge stato base
 ```
 
 ## Note Importanti

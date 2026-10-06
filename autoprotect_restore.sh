@@ -5,6 +5,7 @@ set -euo pipefail
 # Supporta sia snapshot delta esterni (live non-blocking) sia snapshot interni (qcow2 standard).
 
 usage() {
+    local exit_code="${1:-1}"
     local script_name
     script_name="$(basename "$0")"
     echo "Uso: $script_name <file.qcow2> [opzioni]"
@@ -15,13 +16,15 @@ usage() {
     echo "Opzioni:"
     echo "  -l, --list                   Elenca tutti gli snapshot disponibili ed esce"
     echo "  -s, --snapshot <tag|numero>  Seleziona direttamente lo snapshot da ripristinare"
+    echo "  -c, --consolidate, --commit  Consolida tutte le scritture nel disco base e distrugge gli snapshot"
     echo "  -h, --help                   Mostra questo messaggio di aiuto"
     echo ""
     echo "Esempi:"
     echo "  $script_name mydisk.qcow2 --list"
     echo "  $script_name mydisk.qcow2 --snapshot 1"
+    echo "  $script_name mydisk.qcow2 --consolidate"
     echo "  $script_name mydisk.qcow2"
-    exit 1
+    exit "$exit_code"
 }
 
 # Funzione per formattare la dimensione in formato leggibile (KB/MB/GB)
@@ -343,8 +346,11 @@ start_vm_internal() {
 }
 
 main() {
+    if [[ $# -ge 1 ]] && [[ "$1" == "-h" || "$1" == "--help" ]]; then
+        usage 0
+    fi
     if [[ $# -lt 1 ]]; then
-        usage
+        usage 1
     fi
 
     local disk_image="$1"
@@ -355,11 +361,17 @@ main() {
         exit 1
     fi
 
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local list_only=0
     local target_choice=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            -c|--consolidate|--commit)
+                shift
+                exec "${script_dir}/autoprotect_consolidate.sh" "$disk_image" "$@"
+                ;;
             -l|--list)
                 list_only=1
                 shift
@@ -373,7 +385,7 @@ main() {
                 shift 2
                 ;;
             -h|--help)
-                usage
+                usage 0
                 ;;
             *)
                 echo "Opzione non riconosciuta: $1" >&2
@@ -413,11 +425,14 @@ main() {
             exit 1
         fi
     else
-        echo -n "Inserisci il numero o il tag dello snapshot da ripristinare (oppure 'q' per uscire): "
+        echo -n "Inserisci il numero o il tag dello snapshot da ripristinare, 'c' per consolidare nel disco base (oppure 'q' per uscire): "
         read -r input
         if [[ "$input" =~ ^[Qq]$ || -z "$input" ]]; then
             echo "Uscita."
             exit 0
+        fi
+        if [[ "$input" =~ ^[Cc]$ ]]; then
+            exec "${script_dir}/autoprotect_consolidate.sh" "$disk_image"
         fi
         if [[ "$input" =~ ^[0-9]+$ ]] && [[ "$input" -ge 1 && "$input" -le "$total" ]]; then
             selected_idx=$((input - 1))
