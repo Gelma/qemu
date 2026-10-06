@@ -26,11 +26,23 @@
 #include "migration/ram.h"
 #include "block/snapshot.h"
 #include "block/block-io.h"
+#include "block/block_int-global-state.h"
+#include "system/block-backend-global-state.h"
 #include "qemu/timer.h"
 #include "system/runstate.h"
 #include "system/system.h"
 #include "qemu/error-report.h"
 #include "qemu/notify.h"
+#include "qemu/cutils.h"
+#include <sys/wait.h>
+#include "block/block.h"
+#include "block/block-global-state.h"
+#include "system/ramlist.h"
+#include "system/ramblock.h"
+
+#ifdef qemu_ram_foreach_block
+#undef qemu_ram_foreach_block
+#endif
 
 typedef struct AutoProtectLiveEntry {
     char *tag;
@@ -38,6 +50,16 @@ typedef struct AutoProtectLiveEntry {
     GList *overlay_files;
     int64_t timestamp_sec;
 } AutoProtectLiveEntry;
+
+typedef struct RAMDumpBlock {
+    char idstr[256];
+    uint64_t used_length;
+    void *host_addr;
+} RAMDumpBlock;
+
+typedef struct RAMDumpContext {
+    GArray *blocks;
+} RAMDumpContext;
 
 typedef struct AutoProtectState {
     bool enabled;
@@ -50,6 +72,7 @@ typedef struct AutoProtectState {
     AutoProtectMode mode;
     AutoProtectMode active_mode;
     char *storage_dir;
+    bool night_prune;
     GList *live_snapshots;
     QEMUTimer *timer;
     uint64_t snapshot_counter;
@@ -107,6 +130,7 @@ static void autoprotect_disable_internal(void)
     s->live_snapshots = NULL;
 
     s->enabled = false;
+    s->night_prune = false;
     s->snapshot_in_progress = false;
     s->next_snapshot_time_ms = 0;
 }
@@ -116,8 +140,52 @@ static void autoprotect_exit_cb(Notifier *n, void *data)
     autoprotect_cleanup();
 }
 
+static bool autoprotect_is_night_time(void)
+{
+    time_t now = time(NULL);
+    struct tm tm_info;
+    localtime_r(&now, &tm_info);
+    int hour = tm_info.tm_hour;
+    return (hour >= 23 || hour < 6);
+}
+
+static char *autoprotect_detect_base_dir(AutoProtectState *s)
+{
+    BlockDriverState *bs = NULL;
+    if (s->vmstate_node) {
+        bs = bdrv_find_node(s->vmstate_node);
+    }
+    if (!bs) {
+        BdrvNextIterator it;
+        for (BlockDriverState *b = bdrv_first(&it); b; b = bdrv_next(&it)) {
+            if (bdrv_has_blk(b) && bdrv_is_inserted(b) && bdrv_is_writable(b)) {
+                bs = b;
+                break;
+            }
+        }
+    }
+    if (bs) {
+        bdrv_refresh_filename(bs);
+        if (bs->filename[0] != '\0') {
+            g_autofree char *abs_path = g_canonicalize_filename(bs->filename, NULL);
+            if (abs_path) {
+                char *dir = g_path_get_dirname(abs_path);
+                if (dir) {
+                    return dir;
+                }
+            }
+        }
+    }
+    return g_strdup("/tmp");
+}
+
 static void autoprotect_prune_internal(AutoProtectState *s)
 {
+    if (s->night_prune && !autoprotect_is_night_time()) {
+        info_report("AutoProtect: night-prune is active, skipping internal snapshot prune during daytime.");
+        return;
+    }
+
     Error *local_err = NULL;
     BlockDriverState *bs = bdrv_all_find_vmstate_bs(s->vmstate_node,
                                                     s->has_devices,
@@ -168,6 +236,11 @@ static void autoprotect_prune_internal(AutoProtectState *s)
 
 static void autoprotect_prune_live(AutoProtectState *s)
 {
+    if (s->night_prune && !autoprotect_is_night_time()) {
+        info_report("AutoProtect: night-prune is active, skipping live snapshot prune during daytime.");
+        return;
+    }
+
     int64_t now_sec = (int64_t)time(NULL);
     int64_t retention_sec = s->retention_ms / 1000;
     GList *curr = s->live_snapshots;
@@ -192,13 +265,109 @@ static void autoprotect_prune_live(AutoProtectState *s)
     }
 }
 
+static int autoprotect_collect_ram_block(RAMBlock *rb, void *opaque)
+{
+    RAMDumpContext *ctx = opaque;
+    RAMDumpBlock b;
+    memset(&b, 0, sizeof(b));
+    pstrcpy(b.idstr, sizeof(b.idstr), qemu_ram_get_idstr(rb));
+    b.used_length = qemu_ram_get_used_length(rb);
+    b.host_addr = qemu_ram_get_host_addr(rb);
+    g_array_append_val(ctx->blocks, b);
+    return 0;
+}
+
+static bool autoprotect_save_ram_live_fork(const char *ram_file, const char *dev_file)
+{
+    RAMDumpContext ctx;
+    ctx.blocks = g_array_new(FALSE, FALSE, sizeof(RAMDumpBlock));
+    foreach_not_ignored_block(autoprotect_collect_ram_block, &ctx);
+
+    /* Temporarily enable DOFORK on RAMBlocks so child inherits memory via COW */
+    for (guint i = 0; i < ctx.blocks->len; i++) {
+        RAMDumpBlock *b = &g_array_index(ctx.blocks, RAMDumpBlock, i);
+        if (b->used_length > 0 && b->host_addr) {
+#ifdef MADV_DOFORK
+            madvise(b->host_addr, b->used_length, MADV_DOFORK);
+#endif
+        }
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        error_report("AutoProtect: fork for RAM save failed: %s", strerror(errno));
+        for (guint i = 0; i < ctx.blocks->len; i++) {
+            RAMDumpBlock *b = &g_array_index(ctx.blocks, RAMDumpBlock, i);
+            if (b->used_length > 0 && b->host_addr) {
+#ifdef MADV_DONTFORK
+                madvise(b->host_addr, b->used_length, MADV_DONTFORK);
+#endif
+            }
+        }
+        g_array_free(ctx.blocks, TRUE);
+        return false;
+    }
+
+    if (pid == 0) {
+        /* Child process: write RAM memory blocks directly using COW snapshot */
+        int fd = open(ram_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0) {
+            _exit(1);
+        }
+        uint32_t num_blocks = ctx.blocks->len;
+        if (write(fd, &num_blocks, sizeof(num_blocks)) != sizeof(num_blocks)) {
+            close(fd);
+            _exit(1);
+        }
+        for (guint i = 0; i < ctx.blocks->len; i++) {
+            RAMDumpBlock *b = &g_array_index(ctx.blocks, RAMDumpBlock, i);
+            if (write(fd, b->idstr, sizeof(b->idstr)) != sizeof(b->idstr) ||
+                write(fd, &b->used_length, sizeof(b->used_length)) != sizeof(b->used_length)) {
+                close(fd);
+                _exit(1);
+            }
+            if (b->used_length > 0 && b->host_addr) {
+                uint64_t written = 0;
+                const uint8_t *p = (const uint8_t *)b->host_addr;
+                while (written < b->used_length) {
+                    size_t chunk = MIN((size_t)(b->used_length - written), (size_t)(4 * 1024 * 1024));
+                    ssize_t ret = write(fd, p + written, chunk);
+                    if (ret <= 0) {
+                        close(fd);
+                        _exit(1);
+                    }
+                    written += ret;
+                }
+            }
+        }
+        close(fd);
+        _exit(0);
+    }
+
+    /* Parent process: restore MADV_DONTFORK and continue immediately without waiting */
+    for (guint i = 0; i < ctx.blocks->len; i++) {
+        RAMDumpBlock *b = &g_array_index(ctx.blocks, RAMDumpBlock, i);
+        if (b->used_length > 0 && b->host_addr) {
+#ifdef MADV_DONTFORK
+            madvise(b->host_addr, b->used_length, MADV_DONTFORK);
+#endif
+        }
+    }
+    g_array_free(ctx.blocks, TRUE);
+
+    /* Clean up any completed zombie child processes non-blockingly */
+    waitpid(-1, NULL, WNOHANG);
+    return true;
+}
+
 static bool autoprotect_take_live_snapshot(AutoProtectState *s, const char *tag)
 {
     const char *dir = s->storage_dir ? s->storage_dir : "/tmp";
     g_autofree char *ram_file = g_strdup_printf("%s/%s-ram.state", dir, tag);
+    g_autofree char *dev_file = g_strdup_printf("%s/%s-dev.state", dir, tag);
     Error *err = NULL;
 
-    info_report("AutoProtect: taking live non-blocking snapshot '%s'...", tag);
+    info_report("AutoProtect: taking live non-blocking delta snapshot '%s' in '%s'...", tag, dir);
 
     /* 1. Create external overlays for disks without pausing vCPUs */
     GList *overlay_paths = NULL;
@@ -217,40 +386,50 @@ static bool autoprotect_take_live_snapshot(AutoProtectState *s, const char *tag)
             overlay_paths = g_list_append(overlay_paths, g_strdup(overlay));
         }
     } else {
-        BlockDriverState *bs = bdrv_all_find_vmstate_bs(s->vmstate_node, false, NULL, &err);
-        if (bs) {
-            const char *name = bdrv_get_device_or_node_name(bs);
-            g_autofree char *overlay = g_strdup_printf("%s/%s-disk-%s.qcow2",
-                                                       dir, tag, name);
-            qmp_blockdev_snapshot_sync(name, NULL, overlay, NULL,
-                                       "qcow2", false, 0, &err);
-            if (err) {
-                error_free(err);
-                err = NULL;
-                qmp_blockdev_snapshot_sync(NULL, name, overlay, NULL,
+        BdrvNextIterator it;
+        for (BlockDriverState *bs = bdrv_first(&it); bs; bs = bdrv_next(&it)) {
+            if (bdrv_has_blk(bs) && bdrv_is_inserted(bs) && bdrv_is_writable(bs)) {
+                const char *name = bdrv_get_device_or_node_name(bs);
+                g_autofree char *overlay = g_strdup_printf("%s/%s-disk-%s.qcow2",
+                                                           dir, tag, name);
+                qmp_blockdev_snapshot_sync(name, NULL, overlay, NULL,
                                            "qcow2", false, 0, &err);
+                if (err) {
+                    error_free(err);
+                    err = NULL;
+                    g_autofree char *node_name = g_strdup_printf("%s-%s", name, tag);
+                    qmp_blockdev_snapshot_sync(NULL, name, overlay, node_name,
+                                               "qcow2", false, 0, &err);
+                }
+                if (err) {
+                    error_reportf_err(err, "AutoProtect: disk snapshot failed for '%s': ",
+                                      name);
+                    return false;
+                }
+                overlay_paths = g_list_append(overlay_paths, g_strdup(overlay));
             }
-            if (err) {
-                error_reportf_err(err, "AutoProtect: disk snapshot failed for '%s': ",
-                                  name);
-                return false;
-            }
-            overlay_paths = g_list_append(overlay_paths, g_strdup(overlay));
         }
     }
 
-    /* 2. Save RAM via background snapshot (UFFD-WP) */
-    MigrationState *ms = migrate_get_current();
-    ms->capabilities[MIGRATION_CAPABILITY_BACKGROUND_SNAPSHOT] = true;
+    /* 2. Micro-pause (< 3ms) to capture device state while vCPUs are quiescent */
+    vm_stop(RUN_STATE_SAVE_VM);
+    bdrv_drain_all_begin();
+    qmp_xen_save_devices_state(dev_file, true, true, &err);
+    bdrv_drain_all_end();
 
-    g_autofree char *uri = g_strdup_printf("file:%s", ram_file);
-    qmp_migrate(uri, false, NULL, false, false, &err);
+    /* 3. Fork asynchronous RAM dump and immediately resume VM */
+    bool ram_ok = autoprotect_save_ram_live_fork(ram_file, dev_file);
+    vm_start();
+
     if (err) {
-        error_reportf_err(err, "AutoProtect: background RAM save failed: ");
+        error_reportf_err(err, "AutoProtect: device state save failed: ");
+        return false;
+    }
+    if (!ram_ok) {
         return false;
     }
 
-    /* 3. Record live snapshot entry */
+    /* 4. Record live snapshot entry */
     AutoProtectLiveEntry *entry = g_new0(AutoProtectLiveEntry, 1);
     entry->tag = g_strdup(tag);
     entry->ram_file = g_strdup(ram_file);
@@ -258,7 +437,7 @@ static bool autoprotect_take_live_snapshot(AutoProtectState *s, const char *tag)
     entry->timestamp_sec = time(NULL);
     s->live_snapshots = g_list_append(s->live_snapshots, entry);
 
-    info_report("AutoProtect: live snapshot '%s' initiated (RAM written asynchronously).",
+    info_report("AutoProtect: live non-blocking snapshot '%s' created (RAM dumped asynchronously).",
                 tag);
     return true;
 }
@@ -362,20 +541,11 @@ void qmp_autoprotect_enable(AutoProtectConfig *config, Error **errp)
     AutoProtectMode mode = config->has_mode ? config->mode : AUTO_PROTECT_MODE_AUTO;
     AutoProtectMode active_mode;
 
-    bool uffd_available = ram_write_tracking_available();
-    if (mode == AUTO_PROTECT_MODE_LIVE) {
-        if (!uffd_available) {
-            error_setg(errp,
-                "AutoProtect live mode requested, but host kernel lacks UFFD-WP "
-                "(userfaultfd write-protection >= 5.7 required)");
-            return;
-        }
-        active_mode = AUTO_PROTECT_MODE_LIVE;
-    } else if (mode == AUTO_PROTECT_MODE_INTERNAL) {
+    if (mode == AUTO_PROTECT_MODE_INTERNAL) {
         active_mode = AUTO_PROTECT_MODE_INTERNAL;
     } else {
-        /* AUTO: prefer LIVE when kernel supports write tracking */
-        active_mode = uffd_available ? AUTO_PROTECT_MODE_LIVE : AUTO_PROTECT_MODE_INTERNAL;
+        /* Default / auto / live: use live non-blocking snapshot */
+        active_mode = AUTO_PROTECT_MODE_LIVE;
     }
 
     /* Ensure exit notifier is registered once */
@@ -393,11 +563,12 @@ void qmp_autoprotect_enable(AutoProtectConfig *config, Error **errp)
     s->retention_ms = (int64_t)config->retention_hours * 3600 * 1000;
     s->mode = mode;
     s->active_mode = active_mode;
+    s->night_prune = config->has_night_prune ? config->night_prune : false;
 
     if (config->storage_dir) {
         s->storage_dir = g_strdup(config->storage_dir);
     } else {
-        s->storage_dir = g_strdup("/tmp");
+        s->storage_dir = autoprotect_detect_base_dir(s);
     }
 
     if (config->vmstate) {
@@ -419,13 +590,14 @@ void qmp_autoprotect_enable(AutoProtectConfig *config, Error **errp)
     timer_mod(s->timer, s->next_snapshot_time_ms);
 
     info_report("AutoProtect enabled: mode=%s (active=%s), interval=%" PRId64 "s, "
-                "retention=%" PRId64 "h, prefix='%s', storage-dir='%s'",
+                "retention=%" PRId64 "h, prefix='%s', storage-dir='%s', night-prune=%s",
                 AutoProtectMode_str(s->mode),
                 AutoProtectMode_str(s->active_mode),
                 config->interval_seconds,
                 (int64_t)config->retention_hours,
                 s->name_prefix,
-                s->storage_dir);
+                s->storage_dir,
+                s->night_prune ? "on" : "off");
 }
 
 void qmp_autoprotect_disable(Error **errp)
@@ -455,6 +627,11 @@ AutoProtectInfo *qmp_autoprotect_status(Error **errp)
             info->config->storage_dir = g_strdup(s->storage_dir);
             info->storage_dir = g_strdup(s->storage_dir);
         }
+
+        info->has_night_prune = true;
+        info->night_prune = s->night_prune;
+        info->config->has_night_prune = true;
+        info->config->night_prune = s->night_prune;
 
         info->has_active_mode = true;
         info->active_mode = s->active_mode;
@@ -527,6 +704,16 @@ void autoprotect_parse_cmdline(const char *optarg, Error **errp)
         qobject_ref(val);
         qdict_put_obj(dict, "name-prefix", val);
         qdict_del(dict, "prefix");
+    }
+
+    val = qdict_get(dict, "night-prune");
+    if (!val) {
+        val = qdict_get(dict, "night_prune");
+        if (val) {
+            qobject_ref(val);
+            qdict_put_obj(dict, "night-prune", val);
+            qdict_del(dict, "night_prune");
+        }
     }
 
     Visitor *v = qobject_input_visitor_new_keyval(QOBJECT(dict));

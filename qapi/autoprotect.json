@@ -51,7 +51,11 @@
 #     Defaults to 'auto'.
 #
 # @storage-dir: Directory path used to store live RAM state files and
-#     external overlays in live mode (default: '/tmp').
+#     external overlays in live mode (default: base qcow2 directory).
+#
+# @night-prune: If true, expired snapshot deletions are deferred
+#     and executed exclusively during night hours (23:00 - 06:00).
+#     (default: false).
 #
 # Since: 11.2
 ##
@@ -62,7 +66,8 @@
             '*devices': ['str'],
             '*name-prefix': 'str',
             '*mode': 'AutoProtectMode',
-            '*storage-dir': 'str' } }
+            '*storage-dir': 'str',
+            '*night-prune': 'bool' } }
 
 ##
 # @AutoProtectInfo:
@@ -77,6 +82,9 @@
 # @active-mode: Operational mode currently in effect.
 #
 # @storage-dir: Directory path configured for live snapshots.
+#
+# @night-prune: True if snapshot pruning is restricted to nighttime
+#     hours.
 #
 # @next-snapshot-seconds: Estimated seconds remaining until next
 #     snapshot attempt.
@@ -97,6 +105,7 @@
             '*config': 'AutoProtectConfig',
             '*active-mode': 'AutoProtectMode',
             '*storage-dir': 'str',
+            '*night-prune': 'bool',
             '*next-snapshot-seconds': 'int',
             '*last-snapshot-tag': 'str',
             '*snapshots-taken': 'int',

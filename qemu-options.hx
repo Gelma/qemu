@@ -1947,17 +1947,18 @@ SRST
 ERST
 
 DEF("autoprotect", HAS_ARG, QEMU_OPTION_autoprotect,
-    "-autoprotect interval=SEC,retention=HOURS[,mode=auto|internal|live][,prefix=PREFIX][,dir=DIR]\n"
+    "-autoprotect interval=SEC,retention=HOURS[,mode=auto|internal|live][,prefix=PREFIX][,dir=DIR][,night-prune=on|off]\n"
     "                configure automatic periodic snapshots\n",
     QEMU_ARCH_ALL)
 SRST
-``-autoprotect interval=SEC,retention=HOURS[,mode=auto|internal|live][,prefix=PREFIX][,dir=DIR]``
+``-autoprotect interval=SEC,retention=HOURS[,mode=auto|internal|live][,prefix=PREFIX][,dir=DIR][,night-prune=on|off]``
     Configure automatic periodic snapshots at VM startup.
     ``interval`` (or ``interval-seconds``) specifies how often to take a snapshot in seconds.
     ``retention`` (or ``retention-hours``) specifies the maximum age in hours before snapshots are pruned.
     ``mode`` chooses between ``auto`` (default), ``internal``, or ``live`` (non-blocking).
     ``prefix`` specifies a custom snapshot name prefix (default: ``autoprotect-``).
-    ``dir`` specifies the storage directory for live snapshots (default: ``/tmp``).
+    ``dir`` specifies the storage directory for delta overlays and RAM dumps (default: base disk directory).
+    ``night-prune`` defers expired snapshot deletions exclusively to nighttime hours (23:00 - 06:00).
 ERST
 
 DEF("fsdev", HAS_ARG, QEMU_OPTION_fsdev,

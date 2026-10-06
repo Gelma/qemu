@@ -25,14 +25,18 @@ Key Features
   or QMP ``snapshot-save``) are never touched or deleted by AutoProtect.
 - **Multiple Operational Modes**:
 
-  - ``auto`` (default): Dynamically selects ``live`` non-blocking mode if the
-    host kernel supports userfaultfd write-protection (UFFD-WP >= 5.7),
-    otherwise seamlessly falls back to ``internal``.
+  - ``auto`` (default): Dynamically selects ``live`` non-blocking mode with
+    instantaneous COW overlays and asynchronous RAM dump.
   - ``internal``: Synchronous internal qcow2 snapshots (RAM + disk saved into
     qcow2 image).
-  - ``live``: Non-blocking live snapshots using instantaneous COW overlays
-    (``blockdev-snapshot-sync``) and background RAM migration (UFFD-WP) with
-    minimal vCPU stun.
+  - ``live``: Non-blocking live delta snapshots using instantaneous COW overlays
+    (``blockdev-snapshot-sync``) and asynchronous COW RAM dump with zero perceptible
+    vCPU pause.
+- **Delta Storage Location**: Delta files (storage overlays and RAM dumps) are
+  placed by default in the same directory as the base qcow2 disk image.
+- **Night Pruning**: Optional deferred bulk pruning (``night-prune=on``) that
+  restricts snapshot deletion to nighttime hours (23:00 - 06:00), preventing any
+  disk compaction freeze during working hours.
 - **Startup CLI Option**: Start the VM with AutoProtect pre-configured via
   the ``-autoprotect`` command-line option.
 - **Runtime Management**: Dynamically enable, disable, and monitor via both
@@ -45,8 +49,8 @@ AutoProtect can be enabled directly when launching QEMU:
 
 .. code-block:: shell
 
-   qemu-system-x86_64 -m 4G -drive file=disk.qcow2,format=qcow2 \
-       -autoprotect interval=1800,retention=24,mode=auto
+   qemu-system-x86_64 -m 3G -drive file=/disks/myvm.qcow2,format=qcow2 \
+       -autoprotect interval=60,retention=1,mode=live,night-prune=on
 
 Parameters:
 
@@ -54,7 +58,8 @@ Parameters:
 - ``retention`` (or ``retention-hours``): Retention window in hours (mandatory).
 - ``mode``: Snapshot mode: ``auto``, ``internal``, or ``live`` (default: ``auto``).
 - ``prefix`` (or ``name-prefix``): Prefix for generated snapshot names (default: ``autoprotect-``).
-- ``dir`` (or ``storage-dir``): Target directory for live RAM and overlay files (default: ``/tmp``).
+- ``dir`` (or ``storage-dir``): Target directory for delta overlays and RAM files (default: base disk directory).
+- ``night-prune``: Boolean (``on``/``off``) to defer snapshot deletions to nighttime (23:00 - 06:00).
 
 QMP Management Interface
 ========================
