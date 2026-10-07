@@ -822,17 +822,95 @@ CONSOLIDAMENTO COMPLETATO CON SUCCESSO!
 
 ---
 
+#### 7. Eliminazione Selettiva di Snapshot Singoli o Multipli (`autoprotect_delete.sh` / `autoprotect_rm.sh`)
+
+Consente di eliminare in qualsiasi momento uno o più snapshot selezionati (singoli, elenchi come `1,3,5`, intervalli come `2-4` o per tag temporale), mantenendo **garantita al 100% la consistenza e l'integrità dei dati** dell'intera catena di dischi e degli snapshot superstiti.
+
+##### Architettura del Rebase Coerente Top-Down:
+- Quando viene eliminato uno snapshot intermedio (es. `Snap2` in `Base <- Snap1 <- Snap2 <- Snap3`), lo snapshot successivo (`Snap3`) viene rebaseato in modo sicuro sul genitore superstite (`Snap1`):
+  `qemu-img rebase -b Snap1 -F qcow2 Snap3`
+- Durante il rebase, QEMU estrae e scrive direttamente in `Snap3` tutti i cluster modificati da `Snap2` che non erano già stati sovrascritti.
+- In caso di eliminazione multipla (es. `Snap2` e `Snap4` in una catena da 5 snapshot), i rebase vengono eseguiti in ordine top-down (dal nodo a profondità maggiore al minore), garantendo che nessun cluster intermedio vada perduto.
+- I file overlay eliminati e i rispettivi dump di memoria RAM/dispositivi (`*-ram.state`, `*-dev.state`) vengono rimossi liberando immediatamente spazio su disco.
+
+##### Esempi d'Uso:
+
+```bash
+# 1. Elenco degli snapshot con indice numerico e tag
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --list
+
+# 2. Eliminazione di un singolo snapshot per numero o tag
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 3
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --snapshot autoprotect-20261006-164531
+
+# 3. Eliminazione multipla selettiva (es. snapshot 1, 3 e 5)
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 1,3,5
+
+# 4. Eliminazione di un intervallo di snapshot (es. dal 2 al 4 inclusi)
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 2-4
+
+# 5. Simulazione a vuoto (Dry-Run): mostra i rebase pianificati e lo spazio liberabile senza toccare i file
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 2,4 --dry-run
+
+# 6. Eliminazione automatica senza richiesta di conferma interattiva (per script)
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 1,3 -y
+
+# 7. Menu interattivo guidato (senza argomenti posizionali)
+./autoprotect_delete.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2
+
+# 8. Integrazione da autoprotect_restore.sh
+./autoprotect_restore.sh /mnt/bidone-sda8/super_protezione/disk0.qcow2 --delete 2,4
+# oppure digitando 'd' dal menu interattivo di ripristino
+```
+
+##### Esempio di Output a Terminale:
+```text
+==============================================================================
+           PIANO DI ELIMINAZIONE SELETTIVA SNAPSHOT
+==============================================================================
+Disco base:                /mnt/bidone-sda8/super_protezione/disk0.qcow2
+Snapshot totali rilevati:  5
+Snapshot da eliminare:     2
+  - [2] autoprotect-20261007-100000 (live_delta)
+  - [4] autoprotect-20261007-100200 (live_delta)
+
+Ristrutturazione catena backing (Rebase coerenti necessari: 2):
+  - autoprotect-20261007-100300-disk-virtio0.qcow2 -> nuovo backing: autoprotect-20261007-100100-disk-virtio0.qcow2
+  - autoprotect-20261007-100100-disk-virtio0.qcow2 -> nuovo backing: autoprotect-20261007-095900-disk-virtio0.qcow2
+
+File che verranno rimossi (6 file):
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261007-100000-disk-virtio0.qcow2
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261007-100000-ram.state
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261007-100000-dev.state
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261007-100200-disk-virtio0.qcow2
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261007-100200-ram.state
+  - /mnt/bidone-sda8/super_protezione/autoprotect-20261007-100200-dev.state
+
+Spazio disco stimato liberabile: 6.04 GB
+Nuova foglia attiva al boot:      autoprotect-20261007-100300-disk-virtio0.qcow2
+==============================================================================
+
+Procedere con l'eliminazione consistente degli snapshot selezionati? [s/N]: s
+
+Esecuzione eliminazione in corso...
+
+[OK] Eliminazione completata con successo (6 file rimossi).
+Consistenza della catena di dischi verificata con successo.
+```
+
+---
+
 ## Riepilogo Progressione
 
 ```
-FASE 0 ✅   FASE 1 ✅   FASE 2 ✅   FASE 3 ✅   FASE 4 ✅   FASE 5 ✅   FASE 6 ✅   FASE 7 ✅
-Analisi     Script      QAPI +      Timer +     Live       Hardening & Live Delta, Consolidamento
-            esterno     Stub C      Snapshot    (non-block) Test, Docs, Night-Prune, & Commit Disco
-            QMP                     + Prune                 CLI Option  Restore & Bridge (Zero Snapshot)
-            ────────────────────────────────────────────────────────────────────────────────────────►
-            Zero                    Media                  Alta         Non-blocking Libera Spazio
-            invasività              invasività             invasività   Zero freeze  100% all'ultimo
-            VM blocca               VM blocca              VM NON blocca VM LAN Bridge stato base
+FASE 0 ✅   FASE 1 ✅   FASE 2 ✅   FASE 3 ✅   FASE 4 ✅   FASE 5 ✅   FASE 6 ✅   FASE 7 ✅   FASE 8 ✅
+Analisi     Script      QAPI +      Timer +     Live       Hardening & Live Delta, Consolidamento Eliminazione
+            esterno     Stub C      Snapshot    (non-block) Test, Docs, Night-Prune, & Commit Disco Selettiva (Rebase
+            QMP                     + Prune                 CLI Option  Restore & Bridge (Zero Snapshot) Top-Down 100% Coerente)
+            ────────────────────────────────────────────────────────────────────────────────────────────────────────►
+            Zero                    Media                  Alta         Non-blocking Libera Spazio  Consistenza garantita
+            invasività              invasività             invasività   Zero freeze  100% all'ultimo Singoli, elenchi,
+            VM blocca               VM blocca              VM NON blocca VM LAN Bridge stato base    intervalli (1,3,5 o 2-4)
 ```
 
 ## Note Importanti

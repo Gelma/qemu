@@ -17,12 +17,15 @@ usage() {
     echo "  -l, --list                   Elenca tutti gli snapshot disponibili ed esce"
     echo "  -s, --snapshot <tag|numero>  Seleziona direttamente lo snapshot da ripristinare"
     echo "  -c, --consolidate, --commit  Consolida tutte le scritture nel disco base e distrugge gli snapshot"
+    echo "  -d, --delete <selettore>     Elimina selettivamente snapshot (singoli, multipli o intervalli)"
     echo "  -h, --help                   Mostra questo messaggio di aiuto"
     echo ""
     echo "Esempi:"
     echo "  $script_name mydisk.qcow2 --list"
     echo "  $script_name mydisk.qcow2 --snapshot 1"
     echo "  $script_name mydisk.qcow2 --consolidate"
+    echo "  $script_name mydisk.qcow2 --delete 2,4"
+    echo "  $script_name mydisk.qcow2 --delete 2-5"
     echo "  $script_name mydisk.qcow2"
     exit "$exit_code"
 }
@@ -372,6 +375,10 @@ main() {
                 shift
                 exec "${script_dir}/autoprotect_consolidate.sh" "$disk_image" "$@"
                 ;;
+            -d|--delete)
+                shift
+                exec "${script_dir}/autoprotect_delete.sh" "$disk_image" "$@"
+                ;;
             -l|--list)
                 list_only=1
                 shift
@@ -425,7 +432,7 @@ main() {
             exit 1
         fi
     else
-        echo -n "Inserisci il numero o il tag dello snapshot da ripristinare, 'c' per consolidare nel disco base (oppure 'q' per uscire): "
+        echo -n "Inserisci il numero o il tag dello snapshot da ripristinare, 'c' per consolidare, 'd' per eliminare (oppure 'q' per uscire): "
         read -r input
         if [[ "$input" =~ ^[Qq]$ || -z "$input" ]]; then
             echo "Uscita."
@@ -433,6 +440,9 @@ main() {
         fi
         if [[ "$input" =~ ^[Cc]$ ]]; then
             exec "${script_dir}/autoprotect_consolidate.sh" "$disk_image"
+        fi
+        if [[ "$input" =~ ^[Dd]$ ]]; then
+            exec "${script_dir}/autoprotect_delete.sh" "$disk_image"
         fi
         if [[ "$input" =~ ^[0-9]+$ ]] && [[ "$input" -ge 1 && "$input" -le "$total" ]]; then
             selected_idx=$((input - 1))

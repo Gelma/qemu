@@ -1,0 +1,1 @@
+autoprotect_delete.sh
